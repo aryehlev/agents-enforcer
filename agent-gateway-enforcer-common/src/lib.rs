@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 /// Key for the allowed gateways map.
 /// Stores an IPv4 address and port that traffic is allowed to reach.
@@ -189,3 +189,208 @@ unsafe impl aya::Pod for PathRule {}
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for FileBlockedEvent {}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // GatewayKey tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_gateway_key_new() {
+        let key = GatewayKey::new(0x0A000001, 8080);
+        assert_eq!(key.addr, 0x0A000001);
+        assert_eq!(key.port, 8080);
+        assert_eq!(key._pad, 0);
+    }
+
+    #[test]
+    fn test_gateway_key_equality() {
+        let key1 = GatewayKey::new(0x0A000001, 8080);
+        let key2 = GatewayKey::new(0x0A000001, 8080);
+        let key3 = GatewayKey::new(0x0A000001, 8081);
+
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_gateway_key_clone() {
+        let key1 = GatewayKey::new(0x0A000001, 8080);
+        let key2 = key1;
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn test_gateway_key_size() {
+        // Ensure struct is properly aligned for eBPF maps
+        assert_eq!(core::mem::size_of::<GatewayKey>(), 8);
+    }
+
+    // -------------------------------------------------------------------------
+    // BlockedKey tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_blocked_key_new() {
+        let key = BlockedKey::new(0xC0A80001, 443, IPPROTO_TCP);
+        assert_eq!(key.dst_addr, 0xC0A80001);
+        assert_eq!(key.dst_port, 443);
+        assert_eq!(key.protocol, 6);
+        assert_eq!(key._pad, 0);
+    }
+
+    #[test]
+    fn test_blocked_key_protocols() {
+        let tcp_key = BlockedKey::new(0, 80, IPPROTO_TCP);
+        let udp_key = BlockedKey::new(0, 53, IPPROTO_UDP);
+
+        assert_eq!(tcp_key.protocol, 6);
+        assert_eq!(udp_key.protocol, 17);
+    }
+
+    #[test]
+    fn test_blocked_key_size() {
+        assert_eq!(core::mem::size_of::<BlockedKey>(), 8);
+    }
+
+    // -------------------------------------------------------------------------
+    // BlockedEvent tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_blocked_event_size() {
+        // Ensure struct is properly sized for perf events
+        assert_eq!(core::mem::size_of::<BlockedEvent>(), 16);
+    }
+
+    // -------------------------------------------------------------------------
+    // PathKey tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_path_key_new_simple() {
+        let key = PathKey::new("/tmp");
+        assert_eq!(key.len, 4);
+        assert_eq!(&key.path[..4], b"/tmp");
+        assert_eq!(key.path[4], 0); // null terminated
+    }
+
+    #[test]
+    fn test_path_key_new_longer_path() {
+        let key = PathKey::new("/var/log/agent/output.log");
+        assert_eq!(key.len, 25);
+        assert_eq!(&key.path[..25], b"/var/log/agent/output.log");
+    }
+
+    #[test]
+    fn test_path_key_truncation() {
+        // Create a path longer than MAX_PATH_LEN
+        let long_path: String = "/".to_string() + &"a".repeat(300);
+        let key = PathKey::new(&long_path);
+
+        // Should truncate to MAX_PATH_LEN - 1 (255)
+        assert_eq!(key.len, 255);
+        assert_eq!(key.path[0], b'/');
+        assert_eq!(key.path[254], b'a');
+    }
+
+    #[test]
+    fn test_path_key_empty() {
+        let key = PathKey::new("");
+        assert_eq!(key.len, 0);
+    }
+
+    #[test]
+    fn test_path_key_size() {
+        // 256 bytes for path + 2 bytes for len + 6 bytes padding = 264
+        assert_eq!(core::mem::size_of::<PathKey>(), 264);
+    }
+
+    // -------------------------------------------------------------------------
+    // PathRule tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_path_rule_allow() {
+        let rule = PathRule::allow(FILE_PERM_READ | FILE_PERM_WRITE, true);
+        assert_eq!(rule.rule_type, PathRuleType::Allow);
+        assert_eq!(rule.permissions, FILE_PERM_READ | FILE_PERM_WRITE);
+        assert_eq!(rule.is_prefix, 1);
+    }
+
+    #[test]
+    fn test_path_rule_deny() {
+        let rule = PathRule::deny(FILE_PERM_ALL, false);
+        assert_eq!(rule.rule_type, PathRuleType::Deny);
+        assert_eq!(rule.permissions, FILE_PERM_ALL);
+        assert_eq!(rule.is_prefix, 0);
+    }
+
+    #[test]
+    fn test_path_rule_size() {
+        assert_eq!(core::mem::size_of::<PathRule>(), 4);
+    }
+
+    // -------------------------------------------------------------------------
+    // FileBlockedEvent tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_file_blocked_event_size() {
+        // 256 (path) + 2 (path_len) + 1 (operation) + 4 (pid) + 1 (pad) + padding = 268
+        assert_eq!(core::mem::size_of::<FileBlockedEvent>(), 268);
+    }
+
+    // -------------------------------------------------------------------------
+    // Constants tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_protocol_constants() {
+        assert_eq!(IPPROTO_TCP, 6);
+        assert_eq!(IPPROTO_UDP, 17);
+    }
+
+    #[test]
+    fn test_permission_flags() {
+        assert_eq!(FILE_PERM_READ, 0b0001);
+        assert_eq!(FILE_PERM_WRITE, 0b0010);
+        assert_eq!(FILE_PERM_EXEC, 0b0100);
+        assert_eq!(FILE_PERM_DELETE, 0b1000);
+        assert_eq!(FILE_PERM_ALL, 0b1111);
+    }
+
+    #[test]
+    fn test_permission_flags_combination() {
+        let read_write = FILE_PERM_READ | FILE_PERM_WRITE;
+        assert_eq!(read_write, 0b0011);
+
+        let read_exec = FILE_PERM_READ | FILE_PERM_EXEC;
+        assert_eq!(read_exec, 0b0101);
+    }
+
+    #[test]
+    fn test_map_sizes() {
+        assert_eq!(MAX_GATEWAYS, 64);
+        assert_eq!(MAX_BLOCKED_ENTRIES, 10000);
+        assert_eq!(MAX_PATH_RULES, 256);
+        assert_eq!(MAX_PATH_LEN, 256);
+    }
+
+    // -------------------------------------------------------------------------
+    // PathRuleType tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_path_rule_type_values() {
+        assert_eq!(PathRuleType::Allow as u8, 0);
+        assert_eq!(PathRuleType::Deny as u8, 1);
+    }
+}
