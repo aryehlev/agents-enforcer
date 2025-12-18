@@ -1,0 +1,18 @@
+apiVersion: v2
+name: agent-gateway-enforcer
+description: eBPF-based gateway enforcer for AI agents - restricts network and file access
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ebpf
+  - security
+  - gateway
+  - ai-agents
+  - network-policy
+home: https://github.com/aryehlev/agents-enforcer
+sources:
+  - https://github.com/aryehlev/agents-enforcer
+maintainers:
+  - name: aryehlev
+    url: https://github.com/aryehlev
