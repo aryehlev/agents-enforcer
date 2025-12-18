@@ -1,0 +1,29 @@
+# Build artifacts
+target/
+*.bpf.o
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# CI/CD
+.github/
+
+# Deployment manifests (not needed in image)
+deploy/
+
+# Local configuration
+.env
+.env.local
+*.log
