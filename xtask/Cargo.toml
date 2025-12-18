@@ -1,0 +1,9 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+description = "Build tooling for agent-gateway-enforcer"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
