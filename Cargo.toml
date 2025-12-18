@@ -6,6 +6,25 @@ members = [
     "xtask",
 ]
 
+# Root package for integration tests
+[package]
+name = "agent-gateway-enforcer-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+agent-gateway-enforcer-common = { path = "agent-gateway-enforcer-common" }
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+agent-gateway-enforcer-common = { path = "agent-gateway-enforcer-common", features = ["user"] }
+aya = { version = "0.12", features = ["async_tokio"] }
+
+[[test]]
+name = "integration_test"
+path = "tests/integration_test.rs"
+
 [workspace.dependencies]
 aya = { version = "0.12", features = ["async_tokio"] }
 aya-log = "0.2"
