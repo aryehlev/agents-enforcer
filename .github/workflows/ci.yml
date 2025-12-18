@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature/*]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ==========================================================================
+  # Fast checks - run on every push
+  # ==========================================================================
+
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy on common crate
+        run: cargo clippy --package agent-gateway-enforcer-common -- -D warnings
+
+  # ==========================================================================
+  # Unit tests - no eBPF required
+  # ==========================================================================
+
+  test-common:
+    name: Test Common Types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --package agent-gateway-enforcer-common --verbose
+
+  # ==========================================================================
+  # Build checks
+  # ==========================================================================
+
+  build-common:
+    name: Build Common Crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build common crate
+        run: cargo build --package agent-gateway-enforcer-common --release
+
+  # ==========================================================================
+  # eBPF Build (Linux only, requires bpf-linker)
+  # ==========================================================================
+
+  build-ebpf:
+    name: Build eBPF Program
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly with rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+
+      - name: Build eBPF program
+        run: cargo xtask build-ebpf
+        env:
+          CARGO_CFG_BPF_TARGET_ARCH: x86_64
+
+  # ==========================================================================
+  # Full userspace build (requires eBPF to be built first conceptually,
+  # but we can check syntax without it)
+  # ==========================================================================
+
+  build-userspace:
+    name: Build Userspace Daemon
+    runs-on: ubuntu-latest
+    needs: [build-ebpf]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+
+      - name: Build eBPF first
+        run: cargo xtask build-ebpf
+        env:
+          CARGO_CFG_BPF_TARGET_ARCH: x86_64
+
+      - name: Build userspace daemon
+        run: cargo build --package agent-gateway-enforcer --release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-gateway-enforcer-linux-x86_64
+          path: target/release/agent-gateway-enforcer
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Security audit
+  # ==========================================================================
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run security audit
+        run: cargo audit
+        continue-on-error: true  # Don't fail build on advisories, just warn
