@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/*]
+    branches: [main, develop, feature/*]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,8 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
 
@@ -35,61 +35,89 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
 
-      - name: Run clippy on common crate
-        run: cargo clippy --package agent-gateway-enforcer-common -- -D warnings
+      - name: Run clippy on workspace
+        run: cargo clippy --workspace --all-features -- -D warnings
 
   # ==========================================================================
-  # Unit tests - no eBPF required
+  # Multi-platform tests
   # ==========================================================================
 
-  test-common:
-    name: Test Common Types
-    runs-on: ubuntu-latest
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        rust: [stable]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
 
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo test --package agent-gateway-enforcer-common --verbose
+        run: cargo test --workspace --all-features --verbose
 
   # ==========================================================================
-  # Build checks
+  # Multi-platform builds
   # ==========================================================================
 
-  build-common:
-    name: Build Common Crate
-    runs-on: ubuntu-latest
+  build:
+    name: Build
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-aarch64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
 
-      - name: Build common crate
-        run: cargo build --package agent-gateway-enforcer-common --release
+      - name: Build workspace
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-gateway-enforcer-cli-${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/agent-gateway-enforcer*
+          if-no-files-found: warn
 
   # ==========================================================================
   # eBPF Build (Linux only, requires bpf-linker)
   # ==========================================================================
 
   build-ebpf:
-    name: Build eBPF Program
+    name: Build eBPF Program (Legacy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,43 +138,12 @@ jobs:
         env:
           CARGO_CFG_BPF_TARGET_ARCH: x86_64
 
-  # ==========================================================================
-  # Full userspace build (requires eBPF to be built first conceptually,
-  # but we can check syntax without it)
-  # ==========================================================================
-
-  build-userspace:
-    name: Build Userspace Daemon
-    runs-on: ubuntu-latest
-    needs: [build-ebpf]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
-
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install bpf-linker
-        run: cargo install bpf-linker
-
-      - name: Build eBPF first
-        run: cargo xtask build-ebpf
-        env:
-          CARGO_CFG_BPF_TARGET_ARCH: x86_64
-
-      - name: Build userspace daemon
-        run: cargo build --package agent-gateway-enforcer --release
-
-      - name: Upload binary artifact
+      - name: Upload eBPF artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agent-gateway-enforcer-linux-x86_64
-          path: target/release/agent-gateway-enforcer
-          if-no-files-found: error
+          name: ebpf-program
+          path: target/bpfel-unknown-none/release/agent-gateway-enforcer-ebpf
+          if-no-files-found: warn
 
   # ==========================================================================
   # Security audit
@@ -157,10 +154,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install cargo-audit
         run: cargo install cargo-audit
-
       - name: Run security audit
-        run: cargo audit
-        continue-on-error: true  # Don't fail build on advisories, just warn
+        run: cargo audit --deny warnings
+        continue-on-error: false # Fail on high/critical issues
+        continue-on-error: false

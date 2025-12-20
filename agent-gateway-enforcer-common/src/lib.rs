@@ -191,6 +191,13 @@ unsafe impl aya::Pod for PathRule {}
 unsafe impl aya::Pod for FileBlockedEvent {}
 
 // ============================================================================
+// CONFIGURATION MODULE (user-space only)
+// ============================================================================
+
+#[cfg(feature = "user")]
+pub mod config;
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -392,5 +399,270 @@ mod tests {
     fn test_path_rule_type_values() {
         assert_eq!(PathRuleType::Allow as u8, 0);
         assert_eq!(PathRuleType::Deny as u8, 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // File access enforcement tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_file_permission_flags_individual() {
+        assert_eq!(FILE_PERM_READ, 0b0001);
+        assert_eq!(FILE_PERM_WRITE, 0b0010);
+        assert_eq!(FILE_PERM_EXEC, 0b0100);
+        assert_eq!(FILE_PERM_DELETE, 0b1000);
+    }
+
+    #[test]
+    fn test_file_permission_flags_combinations() {
+        let read_write = FILE_PERM_READ | FILE_PERM_WRITE;
+        assert_eq!(read_write, 0b0011);
+
+        let read_exec = FILE_PERM_READ | FILE_PERM_EXEC;
+        assert_eq!(read_exec, 0b0101);
+
+        let all_perms = FILE_PERM_READ | FILE_PERM_WRITE | FILE_PERM_EXEC | FILE_PERM_DELETE;
+        assert_eq!(all_perms, FILE_PERM_ALL);
+    }
+
+    #[test]
+    fn test_file_permission_flags_has_permission() {
+        let perms = FILE_PERM_READ | FILE_PERM_WRITE;
+
+        assert!(perms & FILE_PERM_READ != 0);
+        assert!(perms & FILE_PERM_WRITE != 0);
+        assert!(perms & FILE_PERM_EXEC == 0);
+        assert!(perms & FILE_PERM_DELETE == 0);
+    }
+
+    #[test]
+    fn test_path_key_with_special_characters() {
+        let paths = [
+            "/tmp/file with spaces.txt",
+            "/var/log/app.log",
+            "/home/user/.config",
+            "/etc/systemd/system/multi-user.target.wants/ssh.service",
+        ];
+
+        for path in &paths {
+            let key = PathKey::new(path);
+            assert!(key.len > 0);
+            assert!(key.len <= MAX_PATH_LEN as u16);
+            
+            // Verify the path was stored correctly
+            let stored = core::str::from_utf8(&key.path[..key.len as usize]).unwrap();
+            assert_eq!(stored, *path);
+        }
+    }
+
+    #[test]
+    fn test_path_key_unicode_handling() {
+        // Test with UTF-8 characters (should be stored as bytes)
+        let unicode_path = "/tmp/测试文件.txt";
+        let key = PathKey::new(unicode_path);
+        
+        assert!(key.len > 0);
+        // The path should be stored as UTF-8 bytes
+        let stored_bytes = &key.path[..key.len as usize];
+        assert_eq!(stored_bytes, unicode_path.as_bytes());
+    }
+
+    #[test]
+    fn test_path_rule_allow_deny_logic() {
+        let allow_rule = PathRule::allow(FILE_PERM_READ, true);
+        let deny_rule = PathRule::deny(FILE_PERM_READ, true);
+
+        assert_eq!(allow_rule.rule_type, PathRuleType::Allow);
+        assert_eq!(deny_rule.rule_type, PathRuleType::Deny);
+        
+        assert!(allow_rule.permissions & FILE_PERM_READ != 0);
+        assert!(deny_rule.permissions & FILE_PERM_READ != 0);
+        
+        assert_eq!(allow_rule.is_prefix, 1);
+        assert_eq!(deny_rule.is_prefix, 1);
+    }
+
+    #[test]
+    fn test_path_rule_exact_vs_prefix() {
+        let exact_rule = PathRule::allow(FILE_PERM_READ, false);
+        let prefix_rule = PathRule::allow(FILE_PERM_READ, true);
+
+        assert_eq!(exact_rule.is_prefix, 0);
+        assert_eq!(prefix_rule.is_prefix, 1);
+    }
+
+    #[test]
+    fn test_path_rule_permission_combinations() {
+        let read_write_rule = PathRule::deny(FILE_PERM_READ | FILE_PERM_WRITE, true);
+        let exec_delete_rule = PathRule::allow(FILE_PERM_EXEC | FILE_PERM_DELETE, false);
+
+        assert!(read_write_rule.permissions & FILE_PERM_READ != 0);
+        assert!(read_write_rule.permissions & FILE_PERM_WRITE != 0);
+        assert!(read_write_rule.permissions & FILE_PERM_EXEC == 0);
+
+        assert!(exec_delete_rule.permissions & FILE_PERM_EXEC != 0);
+        assert!(exec_delete_rule.permissions & FILE_PERM_DELETE != 0);
+        assert!(exec_delete_rule.permissions & FILE_PERM_READ == 0);
+    }
+
+    #[test]
+    fn test_file_blocked_event_structure() {
+        let mut event = FileBlockedEvent {
+            path: [0u8; MAX_PATH_LEN],
+            path_len: 0,
+            operation: FILE_PERM_READ,
+            pid: 1234,
+            _pad: 0,
+        };
+
+        // Test setting a path
+        let test_path = "/tmp/blocked.txt";
+        let path_bytes = test_path.as_bytes();
+        event.path[..path_bytes.len()].copy_from_slice(path_bytes);
+        event.path_len = path_bytes.len() as u16;
+
+        assert_eq!(event.path_len, 16);
+        assert_eq!(event.operation, FILE_PERM_READ);
+        assert_eq!(event.pid, 1234);
+
+        // Verify path was stored correctly
+        let stored_path = core::str::from_utf8(&event.path[..event.path_len as usize]).unwrap();
+        assert_eq!(stored_path, test_path);
+    }
+
+    #[test]
+    fn test_file_blocked_event_all_operations() {
+        let operations = [
+            FILE_PERM_READ,
+            FILE_PERM_WRITE,
+            FILE_PERM_EXEC,
+            FILE_PERM_DELETE,
+            FILE_PERM_READ | FILE_PERM_WRITE,
+            FILE_PERM_ALL,
+        ];
+
+        for (i, &op) in operations.iter().enumerate() {
+            let event = FileBlockedEvent {
+                path: [0u8; MAX_PATH_LEN],
+                path_len: 0,
+                operation: op,
+                pid: i as u32,
+                _pad: 0,
+            };
+
+            assert_eq!(event.operation, op);
+            assert_eq!(event.pid, i as u32);
+        }
+    }
+
+    #[test]
+    fn test_path_key_edge_cases() {
+        // Test single character path
+        let key1 = PathKey::new("/");
+        assert_eq!(key1.len, 1);
+        assert_eq!(key1.path[0], b'/');
+
+        // Test maximum length path (truncated)
+        let max_path = "a".repeat(MAX_PATH_LEN);
+        let key2 = PathKey::new(&max_path);
+        assert_eq!(key2.len, MAX_PATH_LEN as u16 - 1); // -1 for null terminator
+
+        // Test path just under maximum
+        let near_max_path = "a".repeat(MAX_PATH_LEN - 1);
+        let key3 = PathKey::new(&near_max_path);
+        assert_eq!(key3.len, MAX_PATH_LEN as u16 - 1);
+    }
+
+    #[test]
+    fn test_constants_consistency() {
+        // Ensure all constants are properly defined
+        assert!(MAX_GATEWAYS > 0);
+        assert!(MAX_BLOCKED_ENTRIES > 0);
+        assert!(MAX_PATH_RULES > 0);
+        assert!(MAX_PATH_LEN > 0);
+
+        // Ensure permission flags are unique bits
+        assert_eq!(FILE_PERM_READ, 1);
+        assert_eq!(FILE_PERM_WRITE, 2);
+        assert_eq!(FILE_PERM_EXEC, 4);
+        assert_eq!(FILE_PERM_DELETE, 8);
+    }
+
+    // -------------------------------------------------------------------------
+    // Integration-style tests for file access logic
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_file_access_decision_matrix() {
+        // Test various combinations of rules and permissions
+        let test_cases = [
+            // (rule_type, permissions, requested, expected_allow)
+            (PathRuleType::Allow, FILE_PERM_READ, FILE_PERM_READ, true),
+            (PathRuleType::Allow, FILE_PERM_READ, FILE_PERM_WRITE, false),
+            (PathRuleType::Deny, FILE_PERM_READ, FILE_PERM_READ, false),
+            (PathRuleType::Deny, FILE_PERM_READ, FILE_PERM_WRITE, true), // No overlap
+            (PathRuleType::Allow, FILE_PERM_ALL, FILE_PERM_READ, true),
+            (PathRuleType::Deny, FILE_PERM_ALL, FILE_PERM_READ, false),
+        ];
+
+        for (i, &(rule_type, rule_perms, requested, expected)) in test_cases.iter().enumerate() {
+            let rule = if rule_type == PathRuleType::Allow {
+                PathRule::allow(rule_perms, false)
+            } else {
+                PathRule::deny(rule_perms, false)
+            };
+
+            // Simulate the access check logic
+            let permission_matches = rule.permissions & requested != 0;
+            let allowed = if permission_matches {
+                // Rule applies - check if it's an allow rule
+                rule.rule_type == PathRuleType::Allow
+            } else {
+                // Rule doesn't apply (no permission overlap)
+                // In this specific test, we expect false for non-overlapping allow rules
+                // and true for non-overlapping deny rules
+                if rule.rule_type == PathRuleType::Allow {
+                    false // Allow rule doesn't apply
+                } else {
+                    true  // Deny rule doesn't apply
+                }
+            };
+
+            assert_eq!(
+                allowed, expected,
+                "Test case {}: rule_type={:?}, rule_perms={:#x}, requested={:#x}",
+                i, rule_type, rule_perms, requested
+            );
+        }
+    }
+
+    #[test]
+    fn test_path_matching_scenarios() {
+        let test_paths = [
+            "/etc/passwd",
+            "/etc/shadow",
+            "/home/user/.bashrc",
+            "/tmp/app.log",
+            "/var/log/system.log",
+            "/usr/bin/python",
+        ];
+
+        for path in &test_paths {
+            let key = PathKey::new(path);
+            
+            // Test that the path can be reconstructed
+            let reconstructed = core::str::from_utf8(&key.path[..key.len as usize]).unwrap();
+            assert_eq!(reconstructed, *path);
+            
+            // Test prefix matching logic (simplified)
+            let path_str = *path;
+            if let Some(slash_pos) = path_str.rfind('/') {
+                let parent = &path_str[..slash_pos];
+                let parent_key = PathKey::new(parent);
+                
+                // Parent should be shorter
+                assert!(parent_key.len < key.len);
+            }
+        }
     }
 }

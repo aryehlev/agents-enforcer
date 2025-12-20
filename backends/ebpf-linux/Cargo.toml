@@ -1,0 +1,39 @@
+[package]
+name = "agent-gateway-enforcer-backend-ebpf-linux"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "Linux eBPF backend for agent gateway enforcement"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+toml = "0.8"
+
+# CLI dependencies
+clap = { version = "4.0", features = ["derive"] }
+tracing-subscriber = "0.3"
+tempfile = "3.0"
+
+# Local dependencies
+agent-gateway-enforcer-core = { path = "../../agent-gateway-enforcer-core" }
+agent-gateway-enforcer-common = { path = "../../agent-gateway-enforcer-common" }
+
+# eBPF dependencies (Linux only)
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { workspace = true }
+nix = "0.27"
+
+[build-dependencies]
+# Build dependencies for eBPF compilation
+
+[features]
+default = []

@@ -1,0 +1,24 @@
+[package]
+name = "agent-gateway-enforcer-backend-macos"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "macOS desktop backend for agent gateway enforcement"
+license = "MIT"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+
+# Local dependencies
+agent-gateway-enforcer-core = { path = "../../agent-gateway-enforcer-core" }
+agent-gateway-enforcer-common = { path = "../../agent-gateway-enforcer-common" }
+
+[features]
+default = []

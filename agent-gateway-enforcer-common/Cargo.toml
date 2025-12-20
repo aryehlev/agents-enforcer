@@ -10,6 +10,17 @@ user = ["aya"]
 
 [dependencies]
 aya = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
+serde_yaml = { workspace = true }
+
+# For testing configuration without eBPF dependencies
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
+serde_yaml = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
