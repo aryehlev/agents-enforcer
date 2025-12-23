@@ -76,3 +76,6 @@ View logs:
 2. Ensure your nodes have kernel 5.8+ with BPF LSM support
 3. The enforcer attaches to the cgroup: {{ .Values.cgroup }}
 4. All processes in that cgroup will have network restrictions applied
+
+5. Kernel requirements:
+6. Linux kernel 5.7+ with BPF LSM support

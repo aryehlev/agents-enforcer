@@ -1,4 +1,5 @@
 use agent_gateway_enforcer_common::config::*;
+use crate::config::ConfigValidator;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;

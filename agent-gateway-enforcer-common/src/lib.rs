@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(all(not(test), not(feature = "user")), no_std)]
 
 /// Key for the allowed gateways map.
 /// Stores an IPv4 address and port that traffic is allowed to reach.
@@ -70,6 +70,33 @@ pub struct BlockedEvent {
 // Protocol constants
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
+
+/// Network protocol enum
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Protocol {
+    /// TCP protocol
+    Tcp = 6,
+    /// UDP protocol
+    Udp = 17,
+    /// ICMP protocol
+    Icmp = 1,
+    /// Other protocol
+    Other(u8),
+}
+
+/// File access type enum
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileAccessType {
+    /// Read access
+    Read,
+    /// Write access
+    Write,
+    /// Execute access
+    Execute,
+    /// Delete access
+    Delete,
+}
 
 // Map sizes
 pub const MAX_GATEWAYS: u32 = 64;
@@ -172,22 +199,22 @@ pub struct FileBlockedEvent {
     pub _pad: u8,
 }
 
-#[cfg(feature = "user")]
+#[cfg(all(feature = "user", target_os = "linux"))]
 unsafe impl aya::Pod for GatewayKey {}
 
-#[cfg(feature = "user")]
+#[cfg(all(feature = "user", target_os = "linux"))]
 unsafe impl aya::Pod for BlockedKey {}
 
-#[cfg(feature = "user")]
+#[cfg(all(feature = "user", target_os = "linux"))]
 unsafe impl aya::Pod for BlockedEvent {}
 
-#[cfg(feature = "user")]
+#[cfg(all(feature = "user", target_os = "linux"))]
 unsafe impl aya::Pod for PathKey {}
 
-#[cfg(feature = "user")]
+#[cfg(all(feature = "user", target_os = "linux"))]
 unsafe impl aya::Pod for PathRule {}
 
-#[cfg(feature = "user")]
+#[cfg(all(feature = "user", target_os = "linux"))]
 unsafe impl aya::Pod for FileBlockedEvent {}
 
 // ============================================================================

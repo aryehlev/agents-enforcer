@@ -10,6 +10,7 @@ pub mod backend;
 pub mod config;
 pub mod events;
 pub mod metrics;
+pub mod web;
 
 /// Result type alias for core operations
 pub type Result<T> = std::result::Result<T, anyhow::Error>;

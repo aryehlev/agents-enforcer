@@ -1,7 +1,7 @@
 use agent_gateway_enforcer_common::config::*;
 use serde_json::Value;
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
 /// Configuration migrator for handling legacy configurations

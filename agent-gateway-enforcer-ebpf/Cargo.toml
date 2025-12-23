@@ -7,7 +7,7 @@ description = "eBPF program for agent gateway enforcement"
 [dependencies]
 aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"
-agent-gateway-enforcer-common = { path = "../agent-gateway-enforcer-common" }
+agent-gateway-enforcer-common = { path = "../agent-gateway-enforcer-common", default-features = false }
 
 [[bin]]
 name = "agent-gateway-enforcer-ebpf"

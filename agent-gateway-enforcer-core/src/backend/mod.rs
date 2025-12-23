@@ -22,6 +22,11 @@ pub use registry::{BackendFactory, BackendInfo, BackendRegistry};
 /// Type alias for backend-related operations
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
+/// Convenience function to create core errors
+pub fn create_error(context: &str, message: impl Into<String>) -> anyhow::Error {
+    anyhow::anyhow!("{}: {}", context, message.into())
+}
+
 /// Backend type identifier
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BackendType {

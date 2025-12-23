@@ -18,7 +18,15 @@ tracing = { workspace = true }
 
 # Local dependencies
 agent-gateway-enforcer-core = { path = "../../agent-gateway-enforcer-core" }
-agent-gateway-enforcer-common = { path = "../../agent-gateway-enforcer-common" }
+agent-gateway-enforcer-common = { path = "../../agent-gateway-enforcer-common", features = ["user"] }
+
+# macOS UI dependencies
+cocoa = "0.25"
+objc = "0.2"
+objc-foundation = "0.1"
+objc_id = "0.1"
+core-foundation = "0.9"
+core-graphics = "0.23"
 
 [features]
 default = []

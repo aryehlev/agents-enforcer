@@ -224,7 +224,7 @@ impl ConfigManager {
     
     fn serialize_config(&self, config: &UnifiedConfig) -> Result<String> {
         // Use YAML for human-readable format
-        serde_yaml::to_string_pretty(config)
+        serde_yaml::to_string(config)
             .map_err(|e| anyhow::anyhow!("Failed to serialize configuration to YAML: {}", e))
     }
     
