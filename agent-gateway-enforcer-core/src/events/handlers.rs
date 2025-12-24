@@ -21,7 +21,7 @@ pub trait EventHandler: Send + Sync {
 }
 
 /// Trait for filtering events
-pub trait EventFilter: Send + Sync {
+pub trait EventFilter: std::fmt::Debug + Send + Sync {
     /// Check if an event matches the filter
     fn matches(&self, event: &UnifiedEvent) -> bool;
 
@@ -346,15 +346,16 @@ impl BufferEventHandler {
 impl EventHandler for BufferEventHandler {
     async fn handle_event(&self, event: UnifiedEvent) -> crate::Result<()> {
         let mut events = self.events.lock().await;
-        
+
         // Add the event
         events.push(event);
-        
+
         // Remove oldest events if we exceed max size
-        if events.len() > self.max_size {
-            events.drain(0..events.len() - self.max_size);
+        let len = events.len();
+        if len > self.max_size {
+            events.drain(0..len - self.max_size);
         }
-        
+
         Ok(())
     }
 
@@ -406,22 +407,32 @@ impl MetricsEventHandler {
 impl EventHandler for MetricsEventHandler {
     async fn handle_event(&self, event: UnifiedEvent) -> crate::Result<()> {
         // Update event counters
-        self.metrics.events_total.inc(&[event.event_type.to_string()]);
-        self.metrics.events_by_source.inc(&[event.source.to_string()]);
-        self.metrics.events_by_severity.inc(&[event.severity.as_str().to_string()]);
+        self.metrics.events.events_by_type
+            .with_label_values(&[&event.event_type.to_string()])
+            .inc();
+        self.metrics.events.events_by_source
+            .with_label_values(&[&event.source.to_string()])
+            .inc();
+        self.metrics.events.events_by_severity
+            .with_label_values(&[event.severity.as_str()])
+            .inc();
 
         // Update specific metrics based on event type
         match &event.data {
             crate::events::EventData::Network(network_event) => {
                 match network_event.action {
                     crate::events::NetworkAction::Blocked => {
-                        self.metrics.network_blocked_total.inc(&[]);
+                        self.metrics.network.network_blocked_total
+                            .with_label_values(&["", "", ""])
+                            .inc();
                     }
                     crate::events::NetworkAction::Allowed => {
-                        self.metrics.network_allowed_total.inc(&[]);
+                        self.metrics.network.network_allowed_total
+                            .with_label_values(&["", "", ""])
+                            .inc();
                     }
                     crate::events::NetworkAction::RateLimited => {
-                        self.metrics.network_rate_limited_total.inc(&[]);
+                        self.metrics.network.network_rate_limited_total.inc();
                     }
                     crate::events::NetworkAction::Unknown => {}
                 }
@@ -429,19 +440,25 @@ impl EventHandler for MetricsEventHandler {
             crate::events::EventData::FileAccess(file_event) => {
                 match file_event.action {
                     crate::events::FileAction::Blocked => {
-                        self.metrics.file_blocked_total.inc(&[]);
+                        self.metrics.files.file_blocked_total
+                            .with_label_values(&["", ""])
+                            .inc();
                     }
                     crate::events::FileAction::Allowed => {
-                        self.metrics.file_allowed_total.inc(&[]);
+                        self.metrics.files.file_allowed_total
+                            .with_label_values(&["", ""])
+                            .inc();
                     }
                     crate::events::FileAction::Quarantined => {
-                        self.metrics.file_quarantined_total.inc(&[]);
+                        self.metrics.files.file_quarantined_total.inc();
                     }
                     crate::events::FileAction::Unknown => {}
                 }
             }
             crate::events::EventData::Security(_) => {
-                self.metrics.security_events_total.inc(&[]);
+                self.metrics.security.security_events_total
+                    .with_label_values(&["", ""])
+                    .inc();
             }
             _ => {}
         }

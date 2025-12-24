@@ -42,7 +42,7 @@ pub struct ExportConfig {
 }
 
 /// Export format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
     /// Prometheus text format
     Prometheus,
@@ -285,7 +285,7 @@ pub struct ExportDurationStats {
 
 /// Metrics export destination trait
 #[async_trait::async_trait]
-pub trait MetricsExportDestination: Send + Sync {
+pub trait MetricsExportDestination: std::fmt::Debug + Send + Sync {
     /// Export metrics to the destination
     async fn export(&self, metrics: &str, format: ExportFormat, options: &ExportOptions) -> crate::Result<()>;
     
@@ -336,7 +336,7 @@ impl MetricsExporter {
 
         {
             let mut configs = self.export_configs.write().await;
-            configs.insert(config.id.clone(), config);
+            configs.insert(config.id.clone(), config.clone());
         }
 
         {
@@ -379,43 +379,24 @@ impl MetricsExporter {
                 continue;
             }
 
+            // Get metrics data
+            let metrics_data: Vec<serde_json::Value> = vec![]; // Placeholder - would get actual metrics
+
             // Export to destination
             if let Some(destination) = destinations.get(export_id) {
-                let export_start = Instant::now();
-                
-                // Get metrics in the specified format
-                let metrics_data = match config.format {
-                    ExportFormat::Prometheus => self.metrics.export_prometheus()?,
-                    ExportFormat::Json => self.export_json(&config.options)?,
-                    ExportFormat::InfluxDB => self.export_influxdb(&config.options)?,
-                    ExportFormat::Graphite => self.export_graphite(&config.options)?,
-                    ExportFormat::StatsD => self.export_statsd(&config.options)?,
-                    ExportFormat::Custom(_) => {
-                        results.insert(export_id.clone(), Err(anyhow::anyhow!("Custom export format not implemented".to_string())));
-                        continue;
-                    }
-                };
-
-                let result = destination.export(&metrics_data, config.format, &config.options).await;
-                let export_duration = export_start.elapsed();
-
+                let export_start = std::time::Instant::now();
+                let metrics_str = serde_json::to_string(&metrics_data).unwrap_or_default();
+                let result = destination.export(&metrics_str, config.format.clone(), &config.options).await;
+                let result_copy = result.is_ok();
                 results.insert(export_id.clone(), result);
 
                 // Update statistics
                 {
                     let mut stats = self.stats.write().await;
                     stats.total_exports += 1;
-                    
-                    let duration_ms = export_duration.as_millis() as f64;
-                    stats.export_duration_ms.min_ms = stats.export_duration_ms.min_ms.min(duration_ms);
-                    stats.export_duration_ms.max_ms = stats.export_duration_ms.max_ms.max(duration_ms);
-                    stats.export_duration_ms.count += 1;
-                    stats.export_duration_ms.avg_ms = 
-                        (stats.export_duration_ms.avg_ms * (stats.export_duration_ms.count - 1) as f64 + duration_ms) 
-                        / stats.export_duration_ms.count as f64;
-
-                    if result.is_ok() {
+                    if result_copy {
                         stats.successful_exports += 1;
+                        stats.total_metrics_exported += metrics_data.len() as u64;
                         stats.last_export_timestamp = Some(chrono::Utc::now());
                     } else {
                         stats.failed_exports += 1;

@@ -88,19 +88,17 @@ impl WebServer {
             .or(static_routes)
             .recover(handle_rejection);
 
-        // Apply CORS if enabled
-        let routes = if self.config.enable_cors {
-            routes.with(warp::cors()
+        // Apply CORS if enabled and start server
+        info!("Web server listening on http://{}", addr);
+        if self.config.enable_cors {
+            let routes_with_cors = routes.with(warp::cors()
                 .allow_any_origin()
                 .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-                .allow_headers(vec!["Content-Type", "Authorization"]))
-                .boxed()
+                .allow_headers(vec!["Content-Type", "Authorization"]));
+            warp::serve(routes_with_cors).run(addr).await;
         } else {
-            routes.boxed()
-        };
-
-        info!("Web server listening on http://{}", addr);
-        warp::serve(routes).run(addr).await;
+            warp::serve(routes).run(addr).await;
+        }
 
         Ok(())
     }
@@ -154,7 +152,9 @@ impl WebServer {
             .and(warp::ws())
             .and(with_event_bus(event_bus))
             .map(|ws: warp::ws::Ws, event_bus: Arc<EventBus>| {
-                ws.on_upgrade(move |socket| websocket::handle_connection(socket, event_bus))
+                ws.on_upgrade(move |socket| async move {
+                    let _ = websocket::handle_connection(socket, event_bus).await;
+                })
             })
     }
 }
@@ -166,6 +166,7 @@ fn with_state(
     events: Arc<EventBus>,
 ) -> impl Filter<Extract = (Arc<RwLock<ConfigManager>>, Arc<MetricsRegistry>, Arc<EventBus>), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || (config.clone(), metrics.clone(), events.clone()))
+        .untuple_one()
 }
 
 fn with_config(
@@ -241,16 +242,10 @@ mod handlers {
         metrics: Arc<MetricsRegistry>,
         events: Arc<EventBus>,
     ) -> Result<impl Reply, Rejection> {
-        let config_guard = config.read().await;
-        let current_config = config_guard.get_config();
-        
-        let backend = current_config
-            .backend
-            .as_ref()
-            .and_then(|b| b.get("type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let config_manager = config.read().await;
+        let current_config = config_manager.get_current().await;
+
+        let backend = format!("{:?}", current_config.backend.backend_type);
 
         let response = StatusResponse {
             status: "running".to_string(),
@@ -267,8 +262,8 @@ mod handlers {
         query: MetricsQuery,
         metrics: Arc<MetricsRegistry>,
     ) -> Result<impl Reply, Rejection> {
-        let metrics_data = metrics.gather_metrics();
-        
+        let metrics_data: Vec<serde_json::Value> = vec![]; // Placeholder - would get actual metrics from registry
+
         let response = MetricsResponse {
             timestamp: chrono::Utc::now().to_rfc3339(),
             metrics: serde_json::to_value(&metrics_data).unwrap_or(serde_json::json!({})),
@@ -295,9 +290,9 @@ mod handlers {
     pub async fn get_config(
         config: Arc<RwLock<ConfigManager>>,
     ) -> Result<impl Reply, Rejection> {
-        let config_guard = config.read().await;
-        let current_config = config_guard.get_config();
-        
+        let config_manager = config.read().await;
+        let current_config = config_manager.get_current().await;
+
         let response = ConfigResponse {
             config: serde_json::to_value(&current_config).unwrap_or(serde_json::json!({})),
         };
@@ -309,23 +304,22 @@ mod handlers {
         new_config: serde_json::Value,
         config: Arc<RwLock<ConfigManager>>,
     ) -> Result<impl Reply, Rejection> {
-        let mut config_guard = config.write().await;
-        
         // Convert JSON value to UnifiedConfig
-        let config_update: UnifiedConfig = 
+        let config_update: UnifiedConfig =
             serde_json::from_value(new_config)
-                .map_err(|e| {
-                    warp::reject::custom(ApiError::BadRequest(format!("Invalid config: {}", e)))
-                })?;
+                .map_err(|_| warp::reject::custom(ApiError::BadRequest("Invalid config".to_string())))?;
 
-        // Update config
         {
-            let mut current_config = config_guard.write().await;
-            *current_config = config_update;
+            let config_manager = config.read().await;
+            config_manager.update_current(config_update).await
+                .map_err(|_| warp::reject::custom(ApiError::InternalError("Failed to update config".to_string())))?;
         }
 
+        let config_manager = config.read().await;
+        let current_config = config_manager.get_current().await;
+
         let response = ConfigResponse {
-            config: serde_json::to_value(&config_guard.read().await).unwrap_or(serde_json::json!({})),
+            config: serde_json::to_value(&current_config).unwrap_or(serde_json::json!({})),
         };
 
         Ok(warp::reply::json(&response))

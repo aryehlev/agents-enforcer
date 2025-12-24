@@ -70,7 +70,7 @@ impl BackendLifecycleManager {
     /// ```
     pub async fn start_backend(&self, backend_type: &BackendType, _config: &UnifiedConfig) -> Result<()> {
         // Stop current backend if running
-        self.stop_current_backend().await?;
+        self.stop_current_backend()?;
         
         // Create new backend
         let backend = self.registry.get_backend(backend_type).await?;
@@ -92,7 +92,7 @@ impl BackendLifecycleManager {
         // For now, we'll document this limitation
         
         // Store as current backend
-        let mut current = self.current_backend.write().await;
+        let mut current = self.current_backend.blocking_write();
         *current = Some(backend_arc);
         
         Ok(())
@@ -135,11 +135,11 @@ impl BackendLifecycleManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn stop_current_backend(&self) -> Result<()> {
-        let mut current = self.current_backend.write().await;
+    pub fn stop_current_backend(&self) -> Result<()> {
+        let mut current = self.current_backend.blocking_write();
         if let Some(_backend) = current.take() {
             // Backend cleanup would happen here
-            // In practice: backend.stop().await?; backend.cleanup().await?;
+            // In practice: backend.stop()?; backend.cleanup()?;
             // But we can't call &mut methods on Arc<dyn Trait> directly
             // The backend implementations should use interior mutability
         }
@@ -161,8 +161,13 @@ impl BackendLifecycleManager {
     /// }
     /// # }
     /// ```
-    pub async fn current_backend(&self) -> Option<Arc<dyn EnforcementBackend>> {
-        self.current_backend.read().await.clone()
+    pub fn current_backend(&self) -> Option<Arc<dyn EnforcementBackend>> {
+        // Note: This returns a clone of the Option<Arc<EnforcementBackend>>
+        // We need to handle this carefully since we can't clone the trait object directly
+        tokio::task::block_in_place(|| {
+            let guard = self.current_backend.blocking_read();
+            guard.clone()
+        })
     }
     
     /// Check if a backend is currently running
@@ -176,8 +181,10 @@ impl BackendLifecycleManager {
     /// }
     /// # }
     /// ```
-    pub async fn is_running(&self) -> bool {
-        self.current_backend.read().await.is_some()
+    pub fn is_running(&self) -> bool {
+        tokio::task::block_in_place(|| {
+            self.current_backend.blocking_read().is_some()
+        })
     }
     
     /// Perform a health check on the current backend
@@ -196,8 +203,8 @@ impl BackendLifecycleManager {
     /// # }
     /// ```
     pub async fn health_check(&self) -> Result<BackendHealth> {
-        if let Some(backend) = self.current_backend().await {
-            backend.health_check().await
+        if let Some(backend) = self.current_backend() {
+            backend.health_check()
         } else {
             Ok(BackendHealth {
                 status: HealthStatus::Unknown,
@@ -228,21 +235,17 @@ impl BackendLifecycleManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn reconfigure(&self, _config: &UnifiedConfig) -> Result<()> {
-        if let Some(_backend) = self.current_backend().await {
-            // In practice: 
-            // backend.configure_gateways(&config.gateways).await?;
-            // backend.configure_file_access(&config.file_access).await?;
-            
-            // Due to Arc<dyn Trait> limitations, actual implementations
-            // would need to use interior mutability
+    pub fn reconfigure(&self, config: &UnifiedConfig) -> Result<()> {
+        if let Some(backend) = self.current_backend() {
+            backend.configure_gateways(&config.gateways)?;
+            backend.configure_file_access(&config.file_access)?;
             Ok(())
         } else {
             Err(anyhow::anyhow!("No backend is currently running"))
         }
     }
     
-    /// Get the registry used by this lifecycle manager
+    /// Get registry used by this lifecycle manager
     pub fn registry(&self) -> Arc<BackendRegistry> {
         Arc::clone(&self.registry)
     }

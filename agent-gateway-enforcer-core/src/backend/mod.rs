@@ -182,7 +182,6 @@ pub trait EventHandler: Send + Sync {
 /// This trait defines the interface that all platform-specific enforcement
 /// backends must implement. It provides methods for initialization, lifecycle
 /// management, configuration, and monitoring.
-#[async_trait]
 pub trait EnforcementBackend: Send + Sync {
     /// Returns the backend type identifier
     fn backend_type(&self) -> BackendType;
@@ -198,31 +197,33 @@ pub trait EnforcementBackend: Send + Sync {
     /// This method should prepare the backend for operation but not
     /// start enforcement. It should validate the configuration and
     /// allocate necessary resources.
-    async fn initialize(&mut self, config: &UnifiedConfig) -> Result<()>;
+    fn initialize(&mut self, config: &UnifiedConfig) -> Result<()>;
     
     /// Start enforcement operations
     ///
     /// After this method returns successfully, the backend should be
     /// actively enforcing policies.
-    async fn start(&mut self) -> Result<()>;
+    fn start(&mut self) -> Result<()>;
     
     /// Stop enforcement operations gracefully
     ///
     /// This method should stop enforcement but not release resources.
     /// The backend should be able to be restarted without re-initialization.
-    async fn stop(&mut self) -> Result<()>;
+    fn stop(&mut self) -> Result<()>;
     
     /// Configure network gateway rules
     ///
     /// Update the list of allowed network gateways. This may be called
     /// while the backend is running if hot-reload is supported.
-    async fn configure_gateways(&mut self, gateways: &[GatewayConfig]) -> Result<()>;
-    
+    /// Implementations should use interior mutability (e.g., RwLock) for state changes.
+    fn configure_gateways(&self, gateways: &[GatewayConfig]) -> Result<()>;
+
     /// Configure file access rules
     ///
     /// Update file access control rules. This may be called while the
     /// backend is running if hot-reload is supported.
-    async fn configure_file_access(&mut self, config: &FileAccessConfig) -> Result<()>;
+    /// Implementations should use interior mutability (e.g., RwLock) for state changes.
+    fn configure_file_access(&self, config: &FileAccessConfig) -> Result<()>;
     
     /// Get the metrics collector if supported
     ///
@@ -234,18 +235,18 @@ pub trait EnforcementBackend: Send + Sync {
     /// Returns `None` if the backend doesn't support event streaming.
     fn event_handler(&self) -> Option<Arc<dyn EventHandler>>;
     
-    /// Perform a health check on the backend
+    /// Perform a health check on backend
     ///
     /// This method should verify that the backend is functioning properly
     /// and return detailed health information.
-    async fn health_check(&self) -> Result<BackendHealth>;
+    fn health_check(&self) -> Result<BackendHealth>;
     
     /// Cleanup resources
     ///
     /// This method should release all resources held by the backend.
     /// After calling this method, the backend must be re-initialized
     /// before it can be used again.
-    async fn cleanup(&mut self) -> Result<()>;
+    fn cleanup(&mut self) -> Result<()>;
 }
 
 #[cfg(test)]

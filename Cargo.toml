@@ -7,7 +7,6 @@ members = [
     "backends/ebpf-linux",
     "backends/macos-desktop",
     "agent-gateway-enforcer",         # Legacy compatibility shim
-    "agent-gateway-enforcer-ebpf",    # Legacy eBPF program
     "xtask",
 ]
 
@@ -21,14 +20,6 @@ publish = false
 [dependencies]
 agent-gateway-enforcer-common = { path = "agent-gateway-enforcer-common" }
 libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-agent-gateway-enforcer-common = { path = "agent-gateway-enforcer-common", features = ["user"] }
-aya = { version = "0.12", features = ["async_tokio"] }
-
-[[test]]
-name = "integration_test"
-path = "tests/integration_test.rs"
 
 [workspace.dependencies]
 # Core dependencies
@@ -55,11 +46,10 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace"] }
 
-# eBPF (Linux-specific)
+# eBPF
 aya = { version = "0.12", features = ["async_tokio"] }
 aya-ebpf = "0.1"
 aya-log = "0.2"
-aya-log-ebpf = "0.1"
 
 # Configuration
 toml = "0.8"

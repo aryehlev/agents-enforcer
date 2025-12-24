@@ -1,0 +1,51 @@
+# Simple Agent Gateway Enforcer Configuration
+# Minimal configuration for quick start
+
+version: "1.0"
+
+backend:
+  backend_type: auto
+  auto_detect: true
+
+# Allow connections to AI API endpoints
+gateways:
+  - address: "api.openai.com:443"
+    description: "OpenAI API"
+    protocols: [https]
+    enabled: true
+    priority: 100
+
+  - address: "api.anthropic.com:443"
+    description: "Anthropic API"
+    protocols: [https]
+    enabled: true
+    priority: 100
+
+# Basic file access control
+file_access:
+  enabled: false
+  default_policy: allow
+
+# Metrics on default port
+metrics:
+  enabled: true
+  port: 9090
+
+# Logging
+logging:
+  level: info
+  format: text
+  output: stdout
+
+# Web UI
+ui:
+  type: web
+  web:
+    enabled: true
+    port: 8080
+    address: "127.0.0.1"
+  native:
+    enabled: false
+
+# No agent-specific rules
+agents: []

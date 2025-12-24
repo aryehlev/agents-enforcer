@@ -18,7 +18,7 @@ pub struct EventBus {
 }
 
 /// Information about a registered handler
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct HandlerInfo {
     /// Handler ID
     id: Uuid,
@@ -30,6 +30,18 @@ struct HandlerInfo {
     name: String,
     /// Registration timestamp
     registered_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl std::fmt::Debug for HandlerInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HandlerInfo")
+            .field("id", &self.id)
+            .field("handler", &"<EventHandler>")
+            .field("filter", &self.filter.is_some())
+            .field("name", &self.name)
+            .field("registered_at", &self.registered_at)
+            .finish()
+    }
 }
 
 /// Event bus statistics
@@ -148,6 +160,7 @@ impl EventBus {
         name: String,
     ) -> Uuid {
         let handler_id = Uuid::new_v4();
+        let name_clone = name.clone();
         let handler_info = HandlerInfo {
             id: handler_id,
             handler,
@@ -167,7 +180,7 @@ impl EventBus {
             stats.handlers_active = stats.handlers_registered;
         }
 
-        tracing::info!("Registered event handler '{}' with ID {}", name, handler_id);
+        tracing::info!("Registered event handler '{}' with ID {}", name_clone, handler_id);
         handler_id
     }
 
@@ -204,6 +217,11 @@ impl EventBus {
             .map(|info| info.name.clone())
             .collect()
     }
+
+    /// Get a streamer for this event bus
+    pub async fn streamer(&self) -> broadcast::Receiver<UnifiedEvent> {
+        self.sender.subscribe()
+    }
 }
 
 impl EventBusHandle {
@@ -235,6 +253,7 @@ impl EventBusHandle {
         name: String,
     ) -> Uuid {
         let handler_id = Uuid::new_v4();
+        let name_clone = name.clone();
         let handler_info = HandlerInfo {
             id: handler_id,
             handler,
@@ -254,7 +273,7 @@ impl EventBusHandle {
             stats.handlers_active = stats.handlers_registered;
         }
 
-        tracing::info!("Registered event handler '{}' with ID {}", name, handler_id);
+        tracing::info!("Registered event handler '{}' with ID {}", name_clone, handler_id);
         handler_id
     }
 
@@ -296,6 +315,15 @@ impl EventBusHandle {
     pub fn subscribe(&self) -> broadcast::Receiver<UnifiedEvent> {
         self.sender.subscribe()
     }
+
+    /// Get a streamer for this event bus
+    pub async fn streamer(&self) -> broadcast::Receiver<UnifiedEvent> {
+        self.subscribe()
+    }
+
+
+
+
 }
 
 #[cfg(test)]

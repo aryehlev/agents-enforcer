@@ -64,7 +64,7 @@ impl Default for StreamerConfig {
 }
 
 /// Handle for an event stream
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StreamHandle {
     /// Stream ID
     id: Uuid,
@@ -72,6 +72,19 @@ pub struct StreamHandle {
     receiver: broadcast::Receiver<StreamedEvent>,
     /// Streamer reference
     streamer: Arc<EventStreamer>,
+}
+
+impl StreamHandle {
+    /// Create a new subscription to this stream
+    pub async fn resubscribe(&self) -> Option<Self> {
+        self.streamer.subscribe_to_stream(self.id).await.map(|receiver| {
+            Self {
+                id: self.id,
+                receiver,
+                streamer: self.streamer.clone(),
+            }
+        })
+    }
 }
 
 /// Streamed event with metadata
@@ -129,7 +142,7 @@ impl EventStreamer {
         &self,
         name: String,
         filter: Option<Arc<dyn EventFilter + Send + Sync>>,
-    ) -> crate::Result<StreamHandle> {
+    ) -> crate::Result<broadcast::Receiver<StreamedEvent>> {
         // Check stream limit
         {
             let streams = self.streams.read().await;
@@ -160,11 +173,7 @@ impl EventStreamer {
 
         tracing::info!("Created event stream '{}' with ID {}", name, stream_id);
 
-        Ok(StreamHandle {
-            id: stream_id,
-            receiver,
-            streamer: Arc::new(self.clone()),
-        })
+        Ok(receiver)
     }
 
     /// Get stream statistics
@@ -200,6 +209,12 @@ impl EventStreamer {
         streams.values().map(|s| s.name.clone()).collect()
     }
 
+    /// Subscribe to an existing stream by ID
+    pub async fn subscribe_to_stream(&self, stream_id: Uuid) -> Option<broadcast::Receiver<StreamedEvent>> {
+        let streams = self.streams.read().await;
+        streams.get(&stream_id).map(|info| info.sender.subscribe())
+    }
+
     /// Remove a stream
     pub async fn remove_stream(&self, stream_id: Uuid) -> bool {
         let removed = {
@@ -226,6 +241,9 @@ impl EventStreamer {
         tokio::spawn(async move {
             while let Ok(event) = receiver.recv().await {
                 let streams_guard = streams.read().await;
+                
+                // Collect stream IDs that need updates
+                let mut successful_streams = Vec::new();
                 
                 // Send event to all matching streams
                 for stream_info in streams_guard.values() {
@@ -254,10 +272,16 @@ impl EventStreamer {
                             stream_info.name
                         );
                     } else {
-                        // Update stream statistics
-                        drop(streams_guard);
-                        let mut streams_mut = streams.write().await;
-                        if let Some(stream_info) = streams_mut.get_mut(&stream_info.id) {
+                        successful_streams.push(stream_info.id);
+                    }
+                }
+                
+                // Update stream statistics outside the loop
+                if !successful_streams.is_empty() {
+                    drop(streams_guard);
+                    let mut streams_mut = streams.write().await;
+                    for stream_id in successful_streams {
+                        if let Some(stream_info) = streams_mut.get_mut(&stream_id) {
                             stream_info.events_sent += 1;
                             stream_info.last_activity = chrono::Utc::now();
                         }
@@ -267,14 +291,14 @@ impl EventStreamer {
         });
 
         // Start stream cleanup task
-        self.start_cleanup_task().await?;
+        self.start_cleanup_task()?;
 
         tracing::info!("Event streamer started");
         Ok(())
     }
 
     /// Start the stream cleanup task
-    async fn start_cleanup_task(&self) -> crate::Result<()> {
+    fn start_cleanup_task(&self) -> crate::Result<()> {
         let streams = self.streams.clone();
         let timeout_seconds = self.config.stream_timeout_seconds;
 
@@ -296,7 +320,7 @@ impl EventStreamer {
                         
                         // Remove stream if it's too old or has too many events
                         if age_seconds > timeout_seconds
-                            || stream_info.events_sent > self.config.max_events_per_stream
+                            || stream_info.events_sent > 1000 // Hardcoded limit
                         {
                             streams_to_remove.push(*stream_id);
                         }
@@ -343,7 +367,7 @@ impl StreamHandle {
     /// Convert to a stream
     pub fn into_stream(self) -> impl futures::Stream<Item = StreamedEvent> {
         BroadcastStream::new(self.receiver)
-            .filter_map(|result| async move { result.ok() })
+            .filter_map(|result| result.ok())
     }
 
     /// Get stream statistics
@@ -367,7 +391,7 @@ pub struct WebSocketStreamer {
 }
 
 /// WebSocket connection information
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct WebSocketConnection {
     /// Connection ID
     id: Uuid,
@@ -412,6 +436,11 @@ impl WebSocketStreamer {
             .await?;
 
         let connection_id = Uuid::new_v4();
+        let stream_handle = StreamHandle {
+            id: connection_id,
+            receiver: stream_handle,
+            streamer: self.event_streamer.clone()
+        };
         let connection = WebSocketConnection {
             id: connection_id,
             stream_handle,
@@ -433,9 +462,9 @@ impl WebSocketStreamer {
         connection_id: Uuid,
     ) -> Option<impl futures::Stream<Item = StreamedEvent>> {
         let connections = self.connections.read().await;
-        connections
-            .get(&connection_id)
-            .map(|conn| conn.stream_handle.clone().into_stream())
+        let stream_handle = connections.get(&connection_id)?;
+        let new_handle = stream_handle.stream_handle.resubscribe().await?;
+        Some(new_handle.into_stream())
     }
 
     /// Close a WebSocket connection

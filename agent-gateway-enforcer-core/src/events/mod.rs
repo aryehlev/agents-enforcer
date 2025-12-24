@@ -154,6 +154,19 @@ impl UnifiedEvent {
     }
 }
 
+impl std::fmt::Display for UnifiedEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}] {} {} - {:?}",
+            self.timestamp.format("%Y-%m-%d %H:%M:%S"),
+            self.event_type,
+            self.severity,
+            self.data
+        )
+    }
+}
+
 /// Event types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EventType {
@@ -171,6 +184,20 @@ pub enum EventType {
     Configuration,
     /// Custom event type
     Custom(String),
+}
+
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Network => write!(f, "network"),
+            Self::FileAccess => write!(f, "file_access"),
+            Self::System => write!(f, "system"),
+            Self::Security => write!(f, "security"),
+            Self::Performance => write!(f, "performance"),
+            Self::Configuration => write!(f, "configuration"),
+            Self::Custom(s) => write!(f, "custom:{}", s),
+        }
+    }
 }
 
 /// Event source
@@ -194,6 +221,22 @@ pub enum EventSource {
     WebDashboard,
     /// Custom source
     Custom(String),
+}
+
+impl std::fmt::Display for EventSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EbpfLinux => write!(f, "ebpf_linux"),
+            Self::MacOSDesktop => write!(f, "macos_desktop"),
+            Self::WindowsDesktop => write!(f, "windows_desktop"),
+            Self::Core => write!(f, "core"),
+            Self::Config => write!(f, "config"),
+            Self::Metrics => write!(f, "metrics"),
+            Self::Cli => write!(f, "cli"),
+            Self::WebDashboard => write!(f, "web_dashboard"),
+            Self::Custom(s) => write!(f, "custom:{}", s),
+        }
+    }
 }
 
 impl EventSource {
@@ -245,6 +288,12 @@ impl EventSeverity {
             "crit" | "critical" => Some(Self::Critical),
             _ => None,
         }
+    }
+}
+
+impl std::fmt::Display for EventSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -417,7 +466,7 @@ pub enum FileAction {
 }
 
 /// File access type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileAccessType {
     /// Read access
     Read,

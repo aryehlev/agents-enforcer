@@ -88,6 +88,21 @@ pub enum AggregationType {
     UniqueCount,
 }
 
+impl std::fmt::Display for AggregationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Count => write!(f, "count"),
+            Self::Sum => write!(f, "sum"),
+            Self::Average => write!(f, "average"),
+            Self::Min => write!(f, "min"),
+            Self::Max => write!(f, "max"),
+            Self::First => write!(f, "first"),
+            Self::Last => write!(f, "last"),
+            Self::UniqueCount => write!(f, "unique_count"),
+        }
+    }
+}
+
 /// Grouping criterion for aggregation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GroupingCriterion {

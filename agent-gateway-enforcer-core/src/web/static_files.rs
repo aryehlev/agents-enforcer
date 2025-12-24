@@ -23,21 +23,25 @@ fn serve_index(
     static_dir: String,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::any()
-        .map(move || {
-            let path = PathBuf::from(&static_dir).join("index.html");
-            debug!("Serving index.html from {:?}", path);
-            path
-        })
-        .and_then(|path: PathBuf| async move {
-            if path.exists() {
-                Ok(warp::fs::file(path))
-            } else {
-                warn!("index.html not found at {:?}", path);
-                Err(warp::reject::not_found())
+        .and_then(move || {
+            let static_dir = static_dir.clone();
+            async move {
+                let path = PathBuf::from(&static_dir).join("index.html");
+                debug!("Serving index.html from {:?}", path);
+
+                if path.exists() {
+                    match tokio::fs::read(&path).await {
+                        Ok(contents) => Ok::<_, Rejection>(warp::reply::html(String::from_utf8_lossy(&contents).to_string())),
+                        Err(e) => {
+                            warn!("Failed to read index.html: {}", e);
+                            Err(warp::reject::not_found())
+                        }
+                    }
+                } else {
+                    warn!("index.html not found at {:?}", path);
+                    Err(warp::reject::not_found())
+                }
             }
-        })
-        .and_then(|file: warp::fs::File| async move {
-            Ok::<_, Rejection>(file)
         })
 }
 

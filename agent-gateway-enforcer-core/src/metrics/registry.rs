@@ -40,8 +40,8 @@ impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
             max_instances: 100,
-            default_retention: std::time::Duration::from_hours(24),
-            cleanup_interval: std::time::Duration::from_minutes(5),
+            default_retention: std::time::Duration::from_secs(24 * 60 * 60), // 24 hours
+            cleanup_interval: std::time::Duration::from_secs(5 * 60), // 5 minutes
             enable_aggregation: true,
             enable_caching: true,
         }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[async_trait]
 pub trait BackendFactory: Send + Sync {
     /// Create a new backend instance
-    async fn create(&self) -> Result<Arc<dyn EnforcementBackend>>;
+    fn create(&self) -> Result<Arc<dyn EnforcementBackend>>;
     
     /// Get the backend type this factory creates
     fn backend_type(&self) -> BackendType;
@@ -104,13 +104,13 @@ impl BackendRegistry {
     pub async fn get_backend(&self, backend_type: &BackendType) -> Result<Arc<dyn EnforcementBackend>> {
         // Handle auto-detection
         if backend_type == &BackendType::Auto {
-            return self.auto_detect_backend().await;
+            return self.auto_detect_backend();
         }
         
         let factory = self.factories.get(backend_type)
             .ok_or_else(|| anyhow::anyhow!("No factory registered for backend type: {:?}", backend_type))?;
         
-        factory.create().await
+        factory.create()
     }
     
     /// Auto-detect and create a backend for the current platform
@@ -130,17 +130,17 @@ impl BackendRegistry {
     ///
     /// # async fn example() -> anyhow::Result<()> {
     /// let registry = BackendRegistry::new();
-    /// let backend = registry.auto_detect_backend().await?;
+    /// let backend = registry.auto_detect_backend()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn auto_detect_backend(&self) -> Result<Arc<dyn EnforcementBackend>> {
+    pub fn auto_detect_backend(&self) -> Result<Arc<dyn EnforcementBackend>> {
         let current_platform = Platform::current();
         
         // Find a factory that supports the current platform
         for factory in self.factories.values() {
             if factory.platform() == current_platform {
-                return factory.create().await;
+                return factory.create();
             }
         }
         
@@ -294,11 +294,11 @@ mod tests {
             Ok(())
         }
 
-        async fn configure_gateways(&mut self, _gateways: &[super::super::GatewayConfig]) -> Result<()> {
+        async fn configure_gateways(&self, _gateways: &[super::super::GatewayConfig]) -> Result<()> {
             Ok(())
         }
 
-        async fn configure_file_access(&mut self, _config: &super::super::FileAccessConfig) -> Result<()> {
+        async fn configure_file_access(&self, _config: &super::super::FileAccessConfig) -> Result<()> {
             Ok(())
         }
 

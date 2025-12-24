@@ -10,20 +10,19 @@ use std::sync::Arc;
 /// Factory for creating Linux eBPF backend instances
 pub struct EbpfLinuxBackendFactory;
 
-#[async_trait::async_trait]
 impl BackendFactory for EbpfLinuxBackendFactory {
-    async fn create(&self) -> Result<Arc<dyn EnforcementBackend>> {
+    fn create(&self) -> Result<Arc<dyn EnforcementBackend>> {
         Ok(Arc::new(EbpfLinuxBackend::new()))
     }
-    
+
     fn backend_type(&self) -> BackendType {
         BackendType::EbpfLinux
     }
-    
+
     fn platform(&self) -> Platform {
         Platform::Linux
     }
-    
+
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             network_filtering: true,
@@ -44,7 +43,7 @@ pub fn register_backend(registry: &mut BackendRegistry) -> Result<()> {
         platform: factory.platform(),
         capabilities: factory.capabilities(),
     };
-    
+
     registry.register_factory(info.backend_type.clone(), Box::new(factory));
     tracing::info!("Linux eBPF backend registered successfully");
     Ok(())
@@ -54,7 +53,7 @@ pub fn register_backend(registry: &mut BackendRegistry) -> Result<()> {
 pub async fn init() -> Result<Arc<dyn EnforcementBackend>> {
     let mut registry = BackendRegistry::new();
     register_backend(&mut registry)?;
-    
+
     // Create and return a backend instance
     registry.get_backend(&BackendType::EbpfLinux).await
 }
@@ -78,10 +77,10 @@ mod tests {
         assert!(capabilities.configuration_hot_reload);
     }
 
-    #[tokio::test]
-    async fn test_backend_creation() {
+    #[test]
+    fn test_backend_creation() {
         let factory = EbpfLinuxBackendFactory;
-        let backend = factory.create().await.unwrap();
+        let backend = factory.create().unwrap();
         assert_eq!(backend.backend_type(), BackendType::EbpfLinux);
         assert_eq!(backend.platform(), Platform::Linux);
     }

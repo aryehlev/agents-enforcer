@@ -1,5 +1,6 @@
 use agent_gateway_enforcer_common::config::*;
 use crate::config::ConfigValidator;
+use crate::backend::Platform;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
@@ -15,7 +16,11 @@ impl BackendValidator {
 
 #[async_trait]
 impl ConfigValidator for BackendValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "backend"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         match &config.backend.backend_type {
             BackendType::Auto => {
                 // Auto-detect validation
@@ -67,7 +72,11 @@ impl NetworkValidator {
 
 #[async_trait]
 impl ConfigValidator for NetworkValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "network"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         for (index, gateway) in config.gateways.iter().enumerate() {
             // Validate address format
             if gateway.address.is_empty() {
@@ -135,7 +144,11 @@ impl FileAccessValidator {
 
 #[async_trait]
 impl ConfigValidator for FileAccessValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "file_access"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         for (index, rule) in config.file_access.rules.iter().enumerate() {
             // Validate path
             if rule.path.is_empty() {
@@ -199,7 +212,7 @@ impl ConfigValidator for FileAccessValidator {
             
             // Validate conditions
             for (cond_index, condition) in rule.conditions.iter().enumerate() {
-                self.validate_condition(condition, index, cond_index)?;
+                self.validate_condition(condition, index, cond_index).await?;
             }
         }
         
@@ -245,7 +258,7 @@ impl ConfigValidator for FileAccessValidator {
 }
 
 impl FileAccessValidator {
-    fn validate_condition(&self, condition: &RuleCondition, rule_index: usize, cond_index: usize) -> Result<()> {
+    async fn validate_condition(&self, condition: &RuleCondition, rule_index: usize, cond_index: usize) -> Result<()> {
         // Validate condition value
         if condition.value.is_empty() {
             return Err(anyhow::anyhow!(
@@ -331,7 +344,11 @@ impl MetricsValidator {
 
 #[async_trait]
 impl ConfigValidator for MetricsValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "metrics"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         // Validate port range
         if config.metrics.port < 1 || config.metrics.port > 65535 {
             return Err(anyhow::anyhow!(
@@ -382,7 +399,11 @@ impl LoggingValidator {
 
 #[async_trait]
 impl ConfigValidator for LoggingValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "logging"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         // Validate log file path if specified
         if let Some(file_path) = &config.logging.file {
             if file_path.as_os_str().is_empty() {
@@ -435,7 +456,11 @@ impl UIValidator {
 
 #[async_trait]
 impl ConfigValidator for UIValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "ui"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         // Validate prompt timeout
         if config.ui.prompt_timeout > 300 {
             return Err(anyhow::anyhow!(
@@ -510,7 +535,11 @@ impl AgentValidator {
 
 #[async_trait]
 impl ConfigValidator for AgentValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "agent"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         for (index, agent) in config.agents.iter().enumerate() {
             // Validate agent name
             if agent.name.is_empty() {
@@ -580,9 +609,13 @@ impl CompositeValidator {
 
 #[async_trait]
 impl ConfigValidator for CompositeValidator {
-    fn validate(&self, config: &UnifiedConfig) -> Result<()> {
+    fn name(&self) -> &'static str {
+        "composite"
+    }
+    
+    async fn validate(&self, config: &UnifiedConfig) -> Result<()> {
         for validator in &self.validators {
-            validator.validate(config)?;
+            validator.validate(config).await?;
         }
         Ok(())
     }
@@ -594,22 +627,22 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
     
-    #[test]
-    fn test_backend_validator() {
+    #[tokio::test]
+    async fn test_backend_validator() {
         let validator = BackendValidator::new();
         
         // Test valid auto-detect config
         let mut config = UnifiedConfig::default();
         config.backend.backend_type = BackendType::Auto;
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test invalid backend for current platform
         config.backend.backend_type = BackendType::WindowsDesktop;
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
     
-    #[test]
-    fn test_network_validator() {
+    #[tokio::test]
+    async fn test_network_validator() {
         let validator = NetworkValidator::new();
         
         // Test valid gateway
@@ -619,16 +652,16 @@ mod tests {
             protocols: vec![NetworkProtocol::Tcp],
             ..Default::default()
         });
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test invalid address
         config.gateways[0].address = "invalid-address".to_string();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test empty protocols
         config.gateways[0].address = "127.0.0.1:8080".to_string();
         config.gateways[0].protocols.clear();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test duplicate addresses
         config.gateways[0].protocols = vec![NetworkProtocol::Tcp];
@@ -637,11 +670,11 @@ mod tests {
             protocols: vec![NetworkProtocol::Udp],
             ..Default::default()
         });
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
     
-    #[test]
-    fn test_file_access_validator() {
+    #[tokio::test]
+    async fn test_file_access_validator() {
         let validator = FileAccessValidator::new();
         
         // Test valid rule
@@ -654,22 +687,22 @@ mod tests {
             applies_to: vec!["test-agent".to_string()],
             conditions: vec![],
         });
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test invalid regex
         config.file_access.rules[0].pattern = PathPatternType::Regex;
         config.file_access.rules[0].path = "[invalid regex".to_string();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test empty permissions
         config.file_access.rules[0].pattern = PathPatternType::Exact;
         config.file_access.rules[0].path = "/tmp/test".to_string();
         config.file_access.rules[0].permissions.clear();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
     
-    #[test]
-    fn test_metrics_validator() {
+    #[tokio::test]
+    async fn test_metrics_validator() {
         let validator = MetricsValidator::new();
         
         // Test valid config
@@ -677,25 +710,25 @@ mod tests {
         config.metrics.port = 9090;
         config.metrics.endpoint = "/metrics".to_string();
         config.metrics.export_formats = vec![MetricFormat::Prometheus];
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test invalid port
         config.metrics.port = 70000;
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test empty endpoint
         config.metrics.port = 9090;
         config.metrics.endpoint = "".to_string();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test empty export formats
         config.metrics.endpoint = "/metrics".to_string();
         config.metrics.export_formats.clear();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
     
-    #[test]
-    fn test_ui_validator() {
+    #[tokio::test]
+    async fn test_ui_validator() {
         let validator = UIValidator::new();
         
         // Test valid config
@@ -703,25 +736,25 @@ mod tests {
         config.ui.web_dashboard.enabled = true;
         config.ui.web_dashboard.port = 8080;
         config.ui.web_dashboard.host = "127.0.0.1".to_string();
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test invalid timeout
         config.ui.prompt_timeout = 400;
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test invalid language
         config.ui.prompt_timeout = 30;
         config.ui.language = "eng".to_string();
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test TLS without cert/key
         config.ui.language = "en".to_string();
         config.ui.web_dashboard.tls = true;
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
     
-    #[test]
-    fn test_agent_validator() {
+    #[tokio::test]
+    async fn test_agent_validator() {
         let validator = AgentValidator::new();
         let temp_dir = tempdir().unwrap();
         let test_file = temp_dir.path().join("test-agent");
@@ -735,11 +768,11 @@ mod tests {
             backend_specific: std::collections::HashMap::new(),
             permissions: AgentPermissions::default(),
         });
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test non-existent file
         config.agents[0].path = PathBuf::from("/non/existent/file");
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
         
         // Test duplicate name
         config.agents[0].path = test_file;
@@ -749,20 +782,20 @@ mod tests {
             backend_specific: std::collections::HashMap::new(),
             permissions: AgentPermissions::default(),
         });
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
     
-    #[test]
-    fn test_composite_validator() {
+    #[tokio::test]
+    async fn test_composite_validator() {
         let validator = CompositeValidator::default();
         
         // Test valid config
         let config = UnifiedConfig::default();
-        assert!(validator.validate(&config).is_ok());
+        assert!(validator.validate(&config).await.is_ok());
         
         // Test invalid config
         let mut config = UnifiedConfig::default();
         config.metrics.port = 70000; // Invalid port
-        assert!(validator.validate(&config).is_err());
+        assert!(validator.validate(&config).await.is_err());
     }
 }

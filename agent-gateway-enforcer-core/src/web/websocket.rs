@@ -64,14 +64,13 @@ pub async fn handle_connection(ws: WebSocket, event_bus: Arc<EventBus>) {
         }
     });
 
-    // Subscribe to event bus
-    let event_connection = connection.clone();
-    let mut event_subscriber = event_bus.subscribe();
+    let mut event_receiver = event_bus.streamer().await;
+    let connection_clone = connection.clone();
     let event_task = tokio::spawn(async move {
-        while let Ok(event) = event_subscriber.recv().await {
+        while let Ok(event) = event_receiver.recv().await {
             if let Ok(event_json) = serde_json::to_value(&event) {
                 let msg = WebSocketMessage::Event(event_json);
-                if event_connection.send(msg).is_err() {
+                if connection_clone.send(msg).is_err() {
                     break;
                 }
             }

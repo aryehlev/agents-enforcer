@@ -6,7 +6,7 @@ pub mod registry;
 pub mod types;
 
 use prometheus::{
-    Counter, CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounter, IntCounterVec,
+    CounterVec, Gauge, GaugeVec, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
     IntGauge, IntGaugeVec, Opts, Registry,
 };
 use std::collections::HashMap;
@@ -208,13 +208,16 @@ impl UnifiedMetrics {
 
     /// Get metrics summary
     pub fn get_summary(&self) -> MetricsSummary {
+        // Note: In Prometheus 0.13, we can't easily get aggregated values from MetricVec
+        // These values would need to be tracked separately or calculated from gathered metrics
+        // For now, return zero values as placeholders
         MetricsSummary {
-            total_events: self.events.events_total.get(),
-            network_blocked: self.network.network_blocked_total.get(),
-            network_allowed: self.network.network_allowed_total.get(),
-            file_blocked: self.files.file_blocked_total.get(),
-            file_allowed: self.files.file_allowed_total.get(),
-            security_events: self.security.security_events_total.get(),
+            total_events: 0,
+            network_blocked: 0,
+            network_allowed: 0,
+            file_blocked: 0,
+            file_allowed: 0,
+            security_events: 0,
             uptime_seconds: self.system.system_uptime.get(),
         }
     }
@@ -276,9 +279,9 @@ impl EventMetrics {
         registry.register(Box::new(events_by_severity.clone()))?;
 
         let event_processing_duration = HistogramVec::new(
-            Opts::new("agent_gateway_event_processing_duration_seconds", "Event processing duration in seconds"),
+            HistogramOpts::new("agent_gateway_event_processing_duration_seconds", "Event processing duration in seconds")
+                .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
             &["event_type", "component"],
-            vec![0.001, 0.01, 0.1, 1.0, 10.0], // Buckets from 1ms to 10s
         )?;
         registry.register(Box::new(event_processing_duration.clone()))?;
 
@@ -314,14 +317,15 @@ impl NetworkMetrics {
         registry.register(Box::new(network_allowed_total.clone()))?;
 
         let network_rate_limited_total = IntCounter::new(
-            Opts::new("agent_gateway_network_rate_limited_total", "Total network connections rate limited"),
+            "agent_gateway_network_rate_limited_total",
+            "Total network connections rate limited",
         )?;
         registry.register(Box::new(network_rate_limited_total.clone()))?;
 
         let network_connection_duration = HistogramVec::new(
-            Opts::new("agent_gateway_network_connection_duration_seconds", "Network connection duration in seconds"),
+            HistogramOpts::new("agent_gateway_network_connection_duration_seconds", "Network connection duration in seconds")
+                .buckets(vec![0.1, 1.0, 10.0, 60.0, 300.0]), // Buckets from 100ms to 5 minutes
             &["protocol", "dst_port"],
-            vec![0.1, 1.0, 10.0, 60.0, 300.0], // Buckets from 100ms to 5 minutes
         )?;
         registry.register(Box::new(network_connection_duration.clone()))?;
 
@@ -332,7 +336,8 @@ impl NetworkMetrics {
         registry.register(Box::new(network_bytes_transferred.clone()))?;
 
         let network_active_connections = IntGauge::new(
-            Opts::new("agent_gateway_network_active_connections", "Current number of active network connections"),
+            "agent_gateway_network_active_connections",
+            "Current number of active network connections",
         )?;
         registry.register(Box::new(network_active_connections.clone()))?;
 
@@ -369,14 +374,15 @@ impl FileMetrics {
         registry.register(Box::new(file_allowed_total.clone()))?;
 
         let file_quarantined_total = IntCounter::new(
-            Opts::new("agent_gateway_file_quarantined_total", "Total files quarantined"),
+            "agent_gateway_file_quarantined_total",
+            "Total files quarantined",
         )?;
         registry.register(Box::new(file_quarantined_total.clone()))?;
 
         let file_access_duration = HistogramVec::new(
-            Opts::new("agent_gateway_file_access_duration_seconds", "File access duration in seconds"),
+            HistogramOpts::new("agent_gateway_file_access_duration_seconds", "File access duration in seconds")
+                .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
             &["access_type"],
-            vec![0.001, 0.01, 0.1, 1.0, 10.0], // Buckets from 1ms to 10s
         )?;
         registry.register(Box::new(file_access_duration.clone()))?;
 
@@ -387,7 +393,8 @@ impl FileMetrics {
         registry.register(Box::new(file_bytes_accessed.clone()))?;
 
         let file_active_operations = IntGauge::new(
-            Opts::new("agent_gateway_file_active_operations", "Current number of active file operations"),
+            "agent_gateway_file_active_operations",
+            "Current number of active file operations",
         )?;
         registry.register(Box::new(file_active_operations.clone()))?;
 
@@ -412,7 +419,8 @@ impl FileMetrics {
 impl SystemMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let system_uptime = Gauge::new(
-            Opts::new("agent_gateway_system_uptime_seconds", "System uptime in seconds"),
+            "agent_gateway_system_uptime_seconds",
+            "System uptime in seconds",
         )?;
         registry.register(Box::new(system_uptime.clone()))?;
 
@@ -429,7 +437,8 @@ impl SystemMetrics {
         registry.register(Box::new(memory_usage_bytes.clone()))?;
 
         let cpu_usage_percentage = Gauge::new(
-            Opts::new("agent_gateway_cpu_usage_percentage", "CPU usage percentage"),
+            "agent_gateway_cpu_usage_percentage",
+            "CPU usage percentage",
         )?;
         registry.register(Box::new(cpu_usage_percentage.clone()))?;
 
@@ -446,12 +455,14 @@ impl SystemMetrics {
         registry.register(Box::new(network_interface_bytes.clone()))?;
 
         let process_count = IntGauge::new(
-            Opts::new("agent_gateway_process_count", "Number of processes"),
+            "agent_gateway_process_count",
+            "Number of processes",
         )?;
         registry.register(Box::new(process_count.clone()))?;
 
         let thread_count = IntGauge::new(
-            Opts::new("agent_gateway_thread_count", "Number of threads"),
+            "agent_gateway_thread_count",
+            "Number of threads",
         )?;
         registry.register(Box::new(thread_count.clone()))?;
 
@@ -471,9 +482,9 @@ impl SystemMetrics {
 impl PerformanceMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let request_duration = HistogramVec::new(
-            Opts::new("agent_gateway_request_duration_seconds", "Request duration in seconds"),
+            HistogramOpts::new("agent_gateway_request_duration_seconds", "Request duration in seconds")
+                .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
             &["endpoint", "method"],
-            vec![0.001, 0.01, 0.1, 1.0, 10.0], // Buckets from 1ms to 10s
         )?;
         registry.register(Box::new(request_duration.clone()))?;
 
@@ -496,9 +507,9 @@ impl PerformanceMetrics {
         registry.register(Box::new(throughput.clone()))?;
 
         let latency_percentiles = HistogramVec::new(
-            Opts::new("agent_gateway_latency_seconds", "Request latency in seconds"),
+            HistogramOpts::new("agent_gateway_latency_seconds", "Request latency in seconds")
+                .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
             &["operation"],
-            vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
         )?;
         registry.register(Box::new(latency_percentiles.clone()))?;
 
@@ -528,9 +539,9 @@ impl BackendMetrics {
         registry.register(Box::new(backend_status.clone()))?;
 
         let backend_health_check_duration = HistogramVec::new(
-            Opts::new("agent_gateway_backend_health_check_duration_seconds", "Backend health check duration in seconds"),
+            HistogramOpts::new("agent_gateway_backend_health_check_duration_seconds", "Backend health check duration in seconds")
+                .buckets(vec![0.01, 0.1, 1.0, 5.0, 10.0]), // Buckets from 10ms to 10s
             &["backend_name"],
-            vec![0.01, 0.1, 1.0, 5.0, 10.0], // Buckets from 10ms to 10s
         )?;
         registry.register(Box::new(backend_health_check_duration.clone()))?;
 
@@ -596,12 +607,14 @@ impl SecurityMetrics {
         registry.register(Box::new(blocked_attempts_total.clone()))?;
 
         let security_score = Gauge::new(
-            Opts::new("agent_gateway_security_score", "Overall security score (0-100)"),
+            "agent_gateway_security_score",
+            "Overall security score (0-100)",
         )?;
         registry.register(Box::new(security_score.clone()))?;
 
         let active_threats = IntGauge::new(
-            Opts::new("agent_gateway_active_threats", "Number of active threats"),
+            "agent_gateway_active_threats",
+            "Number of active threats",
         )?;
         registry.register(Box::new(active_threats.clone()))?;
 

@@ -1,0 +1,134 @@
+# Production Agent Gateway Enforcer Configuration
+# Secure configuration with file access control and comprehensive monitoring
+
+version: "1.0"
+
+backend:
+  backend_type: auto
+  auto_detect: true
+
+# Production API gateways with priority
+gateways:
+  # Primary AI providers
+  - address: "api.openai.com:443"
+    description: "OpenAI API - GPT models"
+    protocols: [https]
+    enabled: true
+    priority: 100
+    tags: ["ai", "openai", "production"]
+
+  - address: "api.anthropic.com:443"
+    description: "Anthropic API - Claude models"
+    protocols: [https]
+    enabled: true
+    priority: 100
+    tags: ["ai", "anthropic", "production"]
+
+  # Internal services
+  - address: "internal-api.company.com:443"
+    description: "Internal API gateway"
+    protocols: [https, tcp]
+    enabled: true
+    priority: 90
+    tags: ["internal", "production"]
+
+  - address: "db.company.com:5432"
+    description: "PostgreSQL database"
+    protocols: [tcp]
+    enabled: true
+    priority: 80
+    tags: ["database", "internal"]
+
+  # Monitoring and logging
+  - address: "metrics.company.com:9090"
+    description: "Prometheus metrics endpoint"
+    protocols: [https]
+    enabled: true
+    priority: 70
+    tags: ["monitoring", "internal"]
+
+# Strict file access control
+file_access:
+  enabled: true
+  default_policy: deny
+
+  # Allowed paths - minimal set for operation
+  allowed_paths:
+    - "/app/data/*"
+    - "/app/config/*"
+    - "/var/log/agent/*"
+    - "/tmp/agent-*"
+
+  # Explicitly denied sensitive paths
+  denied_paths:
+    - "/etc/passwd"
+    - "/etc/shadow"
+    - "/root/*"
+    - "/home/*/.ssh/*"
+    - "/var/secrets/*"
+
+  # Quarantine suspicious file operations
+  quarantine:
+    enabled: true
+    path: "/var/quarantine/agent"
+
+# Production metrics
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+  interval_seconds: 5
+
+# Structured logging for production
+logging:
+  level: warn  # Only warnings and errors in production
+  format: json  # JSON for log aggregation
+  output: file
+  file_path: "/var/log/agent-gateway-enforcer/enforcer.log"
+
+# Web dashboard for monitoring
+ui:
+  type: web
+  web:
+    enabled: true
+    port: 8080
+    address: "0.0.0.0"  # Accessible from network
+  native:
+    enabled: false
+
+# Production agent configurations
+agents:
+  - name: "primary-agent"
+    description: "Primary production agent"
+    enabled: true
+    process:
+      names: ["agent-prod"]
+      paths: ["/app/bin/agent"]
+
+    # Agent-specific overrides
+    gateways:
+      - "api.openai.com:443"
+      - "api.anthropic.com:443"
+      - "internal-api.company.com:443"
+      - "db.company.com:5432"
+
+    file_access:
+      allowed_paths:
+        - "/app/data/primary/*"
+        - "/var/log/agent/primary.log"
+
+  - name: "backup-agent"
+    description: "Backup/failover agent"
+    enabled: true
+    process:
+      names: ["agent-backup"]
+      paths: ["/app/bin/agent-backup"]
+
+    gateways:
+      - "api.anthropic.com:443"
+      - "internal-api.company.com:443"
+
+    file_access:
+      allowed_paths:
+        - "/app/data/backup/*"
+        - "/var/log/agent/backup.log"

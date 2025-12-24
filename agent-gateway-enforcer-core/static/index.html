@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Gateway Enforcer - Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-color: #3b82f6;
+            --secondary-color: #6366f1;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+            --critical-color: #dc2626;
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-color: #e2e8f0;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --hover-color: #2d3748;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+
+        .container {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: var(--card-bg);
+            padding: 1.5rem 2rem;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-color);
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.connected {
+            background: var(--success-color);
+        }
+
+        .status-dot.error {
+            background: var(--error-color);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        nav.tabs {
+            background: var(--card-bg);
+            padding: 0 2rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 0.5rem;
+            overflow-x: auto;
+        }
+
+        .tab-button {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .tab-button:hover {
+            color: var(--text-color);
+            background: var(--hover-color);
+        }
+
+        .tab-button.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+        }
+
+        main {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .card h2 {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .stat:last-child {
+            border-bottom: none;
+        }
+
+        .stat .label {
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-size: 3rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-align: center;
+            padding: 2rem 0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        input, select, textarea {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .btn-secondary {
+            background: var(--border-color);
+            color: var(--text-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--hover-color);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .event-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .event-item {
+            padding: 0.75rem;
+            border-left: 3px solid var(--border-color);
+            margin-bottom: 0.5rem;
+            background: var(--bg-color);
+            border-radius: 0.375rem;
+        }
+
+        .event-item.info { border-left-color: var(--primary-color); }
+        .event-item.warning { border-left-color: var(--warning-color); }
+        .event-item.error { border-left-color: var(--error-color); }
+        .event-item.critical { border-left-color: var(--critical-color); }
+
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+            font-size: 0.875rem;
+        }
+
+        .event-type {
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .event-time {
+            color: var(--text-muted);
+        }
+
+        .event-body {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 2rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .metric-card {
+            background: var(--bg-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .metric-card h3 {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-top: 1rem;
+        }
+
+        pre {
+            background: var(--bg-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background: var(--bg-color);
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+        }
+
+        td {
+            color: var(--text-color);
+        }
+
+        tr:hover td {
+            background: var(--bg-color);
+        }
+
+        footer {
+            background: var(--card-bg);
+            padding: 1rem 2rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .log-container {
+            background: var(--bg-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+        }
+
+        .log-entry {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .severity-badge {
+            display: inline-block;
+            padding: 0.125rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .severity-badge.debug { background: var(--text-muted); color: var(--bg-color); }
+        .severity-badge.info { background: var(--primary-color); color: white; }
+        .severity-badge.warning { background: var(--warning-color); color: white; }
+        .severity-badge.error { background: var(--error-color); color: white; }
+        .severity-badge.critical { background: var(--critical-color); color: white; }
+
+        .filter-controls {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+
+        .filter-tag {
+            padding: 0.25rem 0.75rem;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-tag:hover {
+            border-color: var(--primary-color);
+        }
+
+        .filter-tag.active {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: white;
+        }
+
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            main {
+                padding: 1rem;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Agent Gateway Enforcer</h1>
+            <div id="status-indicator" class="status-indicator">
+                <span class="status-dot"></span>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-button active" data-tab="dashboard">Dashboard</button>
+            <button class="tab-button" data-tab="events">Events</button>
+            <button class="tab-button" data-tab="metrics">Metrics</button>
+            <button class="tab-button" data-tab="config">Configuration</button>
+        </nav>
+
+        <main>
+            <!-- Dashboard Tab -->
+            <div id="dashboard" class="tab-content active">
+                <div class="grid">
+                    <div class="card">
+                        <h2>System Status</h2>
+                        <div id="system-status">
+                            <div class="stat">
+                                <span class="label">Status:</span>
+                                <span id="system-status-value">Loading...</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">Version:</span>
+                                <span id="version-value">-</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">Uptime:</span>
+                                <span id="uptime-value">-</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">Backend:</span>
+                                <span id="backend-value">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>Active Connections</h2>
+                        <div class="metric-value" id="active-connections">0</div>
+                    </div>
+
+                    <div class="card">
+                        <h2>System Metrics</h2>
+                        <div id="system-metrics">
+                            <div class="stat">
+                                <span class="label">CPU Usage:</span>
+                                <span id="cpu-usage">0%</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">Memory:</span>
+                                <span id="memory-usage">0 MB / 0 MB</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">Load Average:</span>
+                                <span id="load-avg">0.00, 0.00, 0.00</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>Recent Events</h2>
+                        <div id="recent-events" class="event-list">
+                            <p class="empty-state">No recent events</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Events Tab -->
+            <div id="events" class="tab-content">
+                <div class="card">
+                    <h2>Live Event Stream</h2>
+                    <div class="controls">
+                        <input type="text" id="event-search" placeholder="Search events...">
+                        <div class="filter-controls" id="event-filters">
+                            <span class="filter-tag active" data-type="all">All</span>
+                            <span class="filter-tag" data-type="network">Network</span>
+                            <span class="filter-tag" data-type="file_access">File Access</span>
+                            <span class="filter-tag" data-type="system">System</span>
+                            <span class="filter-tag" data-type="security">Security</span>
+                        </div>
+                        <div class="filter-controls">
+                            <span class="filter-tag active" data-severity="all">All Severities</span>
+                            <span class="filter-tag" data-severity="debug">Debug</span>
+                            <span class="filter-tag" data-severity="info">Info</span>
+                            <span class="filter-tag" data-severity="warning">Warning</span>
+                            <span class="filter-tag" data-severity="error">Error</span>
+                            <span class="filter-tag" data-severity="critical">Critical</span>
+                        </div>
+                        <label>
+                            <input type="checkbox" id="auto-scroll" checked>
+                            Auto-scroll
+                        </label>
+                        <button id="clear-events" class="btn btn-secondary">Clear Events</button>
+                    </div>
+                    <div id="events-display" class="event-list">
+                        <p class="empty-state">Waiting for events...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Metrics Tab -->
+            <div id="metrics" class="tab-content">
+                <div class="grid">
+                    <div class="card" style="grid-column: 1 / -1;">
+                        <h2>Network Traffic</h2>
+                        <div class="chart-container">
+                            <canvas id="network-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>Event Counts by Type</h2>
+                        <div class="chart-container">
+                            <canvas id="event-type-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>File Access Statistics</h2>
+                        <div class="chart-container">
+                            <canvas id="file-access-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>System Resource Usage</h2>
+                        <div class="chart-container">
+                            <canvas id="resource-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>Security Alerts</h2>
+                        <div class="chart-container">
+                            <canvas id="security-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration Tab -->
+            <div id="config" class="tab-content">
+                <div class="card">
+                    <h2>Current Configuration</h2>
+                    <div id="config-display">
+                        <pre id="config-content">Loading configuration...</pre>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Gateway Status</h2>
+                    <div id="gateway-status">
+                        <p class="empty-state">Loading gateway information...</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Backend Capabilities</h2>
+                    <div id="backend-capabilities">
+                        <p class="empty-state">Loading backend information...</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <div class="footer-content">
+                <span>Agent Gateway Enforcer v<span id="footer-version">0.1.0</span></span>
+                <span>WebSocket: <span id="ws-status">Disconnected</span></span>
+                <span>Last Update: <span id="last-update">Never</span></span>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        // Application State
+        const state = {
+            ws: null,
+            connected: false,
+            events: [],
+            metrics: {
+                network: [],
+                eventCounts: {},
+                fileAccess: {},
+                resources: [],
+                security: []
+            },
+            config: null,
+            startTime: Date.now(),
+            filters: {
+                type: 'all',
+                severity: 'all',
+                search: ''
+            },
+            charts: {}
+        };
+
+        // WebSocket Connection
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+            state.ws = new WebSocket(wsUrl);
+
+            state.ws.onopen = () => {
+                state.connected = true;
+                updateConnectionStatus(true);
+                console.log('WebSocket connected');
+            };
+
+            state.ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    handleWebSocketMessage(msg);
+                } catch (e) {
+                    console.error('Failed to parse WebSocket message:', e);
+                }
+            };
+
+            state.ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus(false);
+            };
+
+            state.ws.onclose = () => {
+                state.connected = false;
+                updateConnectionStatus(false);
+                console.log('WebSocket disconnected, reconnecting in 5s...');
+                setTimeout(connectWebSocket, 5000);
+            };
+        }
+
+        function handleWebSocketMessage(msg) {
+            switch (msg.type) {
+                case 'Event':
+                    handleEvent(msg.data);
+                    break;
+                case 'Metrics':
+                    handleMetrics(msg.data);
+                    break;
+                case 'Status':
+                    handleStatus(msg.data);
+                    break;
+                case 'Pong':
+                    // Handle pong
+                    break;
+                default:
+                    console.log('Unknown message type:', msg.type);
+            }
+            updateLastUpdate();
+        }
+
+        function handleEvent(event) {
+            state.events.unshift(event);
+            if (state.events.length > 1000) {
+                state.events = state.events.slice(0, 1000);
+            }
+
+            // Update event counts
+            const eventType = event.event_type || 'unknown';
+            state.metrics.eventCounts[eventType] = (state.metrics.eventCounts[eventType] || 0) + 1;
+
+            updateEventsList();
+            updateRecentEvents();
+            updateCharts();
+        }
+
+        function handleMetrics(metrics) {
+            // Store metrics for charts
+            const timestamp = Date.now();
+            state.metrics.resources.push({
+                timestamp,
+                ...metrics
+            });
+
+            if (state.metrics.resources.length > 60) {
+                state.metrics.resources.shift();
+            }
+
+            updateSystemMetrics(metrics);
+            updateCharts();
+        }
+
+        function handleStatus(status) {
+            document.getElementById('system-status-value').textContent = status.status || 'Unknown';
+            document.getElementById('version-value').textContent = status.version || '-';
+            document.getElementById('footer-version').textContent = status.version || '0.1.0';
+            document.getElementById('backend-value').textContent = status.backend || '-';
+            document.getElementById('active-connections').textContent = status.active_connections || 0;
+
+            if (status.uptime_seconds !== undefined) {
+                document.getElementById('uptime-value').textContent = formatUptime(status.uptime_seconds);
+            }
+        }
+
+        // API Calls
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/v1/status');
+                const data = await response.json();
+                handleStatus(data);
+            } catch (e) {
+                console.error('Failed to fetch status:', e);
+            }
+        }
+
+        async function fetchConfig() {
+            try {
+                const response = await fetch('/api/v1/config');
+                const data = await response.json();
+                state.config = data.config;
+                updateConfigDisplay();
+            } catch (e) {
+                console.error('Failed to fetch config:', e);
+            }
+        }
+
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/api/v1/metrics');
+                const data = await response.json();
+                if (data.metrics) {
+                    handleMetrics(data.metrics);
+                }
+            } catch (e) {
+                console.error('Failed to fetch metrics:', e);
+            }
+        }
+
+        // UI Updates
+        function updateConnectionStatus(connected) {
+            const indicator = document.querySelector('.status-dot');
+            const statusText = document.getElementById('status-text');
+            const wsStatus = document.getElementById('ws-status');
+
+            if (connected) {
+                indicator.classList.add('connected');
+                indicator.classList.remove('error');
+                statusText.textContent = 'Connected';
+                wsStatus.textContent = 'Connected';
+            } else {
+                indicator.classList.remove('connected');
+                indicator.classList.add('error');
+                statusText.textContent = 'Disconnected';
+                wsStatus.textContent = 'Disconnected';
+            }
+        }
+
+        function updateLastUpdate() {
+            const now = new Date();
+            document.getElementById('last-update').textContent = now.toLocaleTimeString();
+        }
+
+        function updateEventsList() {
+            const container = document.getElementById('events-display');
+            const filtered = filterEvents(state.events);
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<p class="empty-state">No events match the current filters</p>';
+                return;
+            }
+
+            container.innerHTML = filtered.slice(0, 100).map(event => createEventElement(event)).join('');
+
+            if (document.getElementById('auto-scroll').checked) {
+                container.scrollTop = 0;
+            }
+        }
+
+        function updateRecentEvents() {
+            const container = document.getElementById('recent-events');
+            const recent = state.events.slice(0, 5);
+
+            if (recent.length === 0) {
+                container.innerHTML = '<p class="empty-state">No recent events</p>';
+                return;
+            }
+
+            container.innerHTML = recent.map(event => createEventElement(event)).join('');
+        }
+
+        function filterEvents(events) {
+            return events.filter(event => {
+                const typeMatch = state.filters.type === 'all' ||
+                    (event.event_type && event.event_type.toLowerCase() === state.filters.type);
+
+                const severityMatch = state.filters.severity === 'all' ||
+                    (event.severity && event.severity.toLowerCase() === state.filters.severity);
+
+                const searchMatch = !state.filters.search ||
+                    JSON.stringify(event).toLowerCase().includes(state.filters.search.toLowerCase());
+
+                return typeMatch && severityMatch && searchMatch;
+            });
+        }
+
+        function createEventElement(event) {
+            const severity = (event.severity || 'info').toLowerCase();
+            const eventType = event.event_type || 'unknown';
+            const timestamp = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'N/A';
+            const source = event.source || 'unknown';
+
+            let description = 'Event occurred';
+            if (event.data) {
+                if (event.data.Network) {
+                    const net = event.data.Network;
+                    description = `${net.action || 'Unknown'} connection to ${net.dst_ip || 'unknown'}:${net.dst_port || 0}`;
+                } else if (event.data.FileAccess) {
+                    const file = event.data.FileAccess;
+                    description = `${file.action || 'Unknown'} file access: ${file.path || 'unknown'}`;
+                } else if (event.data.System) {
+                    const sys = event.data.System;
+                    description = sys.message || 'System event';
+                } else if (event.data.Security) {
+                    const sec = event.data.Security;
+                    description = sec.description || 'Security event';
+                }
+            }
+
+            return `
+                <div class="event-item ${severity}">
+                    <div class="event-header">
+                        <span class="event-type">
+                            <span class="severity-badge ${severity}">${severity}</span>
+                            ${eventType}
+                        </span>
+                        <span class="event-time">${timestamp}</span>
+                    </div>
+                    <div class="event-body">
+                        <strong>${source}:</strong> ${description}
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateSystemMetrics(metrics) {
+            if (metrics.cpu !== undefined) {
+                document.getElementById('cpu-usage').textContent = `${metrics.cpu.toFixed(1)}%`;
+            }
+
+            if (metrics.memory) {
+                const used = (metrics.memory.used / 1024 / 1024).toFixed(0);
+                const total = (metrics.memory.total / 1024 / 1024).toFixed(0);
+                document.getElementById('memory-usage').textContent = `${used} MB / ${total} MB`;
+            }
+
+            if (metrics.load_average) {
+                const loads = metrics.load_average.map(l => l.toFixed(2)).join(', ');
+                document.getElementById('load-avg').textContent = loads;
+            }
+        }
+
+        function updateConfigDisplay() {
+            if (!state.config) return;
+
+            const content = document.getElementById('config-content');
+            content.textContent = JSON.stringify(state.config, null, 2);
+
+            // Update gateway status
+            if (state.config.gateways) {
+                const gatewayContainer = document.getElementById('gateway-status');
+                gatewayContainer.innerHTML = state.config.gateways.map(gw => `
+                    <div class="stat">
+                        <span class="label">${gw.name || gw.host}:${gw.port}</span>
+                        <span>${gw.protocol || 'TCP'}</span>
+                    </div>
+                `).join('');
+            }
+
+            // Update backend capabilities
+            if (state.config.backend) {
+                const backendContainer = document.getElementById('backend-capabilities');
+                backendContainer.innerHTML = `
+                    <div class="stat">
+                        <span class="label">Type:</span>
+                        <span>${state.config.backend.backend_type || 'Unknown'}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Network Monitoring:</span>
+                        <span>${state.config.backend.capabilities?.network_monitoring ? 'Enabled' : 'Disabled'}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">File Access Monitoring:</span>
+                        <span>${state.config.backend.capabilities?.file_access_monitoring ? 'Enabled' : 'Disabled'}</span>
+                    </div>
+                `;
+            }
+        }
+
+        // Charts
+        function initializeCharts() {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: '#94a3b8'
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: '#334155' }
+                    },
+                    x: {
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: '#334155' }
+                    }
+                }
+            };
+
+            // Network Traffic Chart
+            state.charts.network = new Chart(
+                document.getElementById('network-chart'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Network Events',
+                            data: [],
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            tension: 0.4
+                        }]
+                    },
+                    options: chartOptions
+                }
+            );
+
+            // Event Type Chart
+            state.charts.eventType = new Chart(
+                document.getElementById('event-type-chart'),
+                {
+                    type: 'doughnut',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            data: [],
+                            backgroundColor: [
+                                '#3b82f6',
+                                '#10b981',
+                                '#f59e0b',
+                                '#ef4444',
+                                '#6366f1'
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: { color: '#94a3b8' }
+                            }
+                        }
+                    }
+                }
+            );
+
+            // File Access Chart
+            state.charts.fileAccess = new Chart(
+                document.getElementById('file-access-chart'),
+                {
+                    type: 'bar',
+                    data: {
+                        labels: ['Allowed', 'Blocked', 'Quarantined'],
+                        datasets: [{
+                            label: 'File Operations',
+                            data: [0, 0, 0],
+                            backgroundColor: ['#10b981', '#ef4444', '#f59e0b']
+                        }]
+                    },
+                    options: chartOptions
+                }
+            );
+
+            // Resource Usage Chart
+            state.charts.resources = new Chart(
+                document.getElementById('resource-chart'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [
+                            {
+                                label: 'CPU %',
+                                data: [],
+                                borderColor: '#3b82f6',
+                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                tension: 0.4
+                            },
+                            {
+                                label: 'Memory %',
+                                data: [],
+                                borderColor: '#10b981',
+                                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                tension: 0.4
+                            }
+                        ]
+                    },
+                    options: chartOptions
+                }
+            );
+
+            // Security Chart
+            state.charts.security = new Chart(
+                document.getElementById('security-chart'),
+                {
+                    type: 'bar',
+                    data: {
+                        labels: ['Low', 'Medium', 'High', 'Critical'],
+                        datasets: [{
+                            label: 'Security Alerts',
+                            data: [0, 0, 0, 0],
+                            backgroundColor: ['#10b981', '#f59e0b', '#ef4444', '#dc2626']
+                        }]
+                    },
+                    options: chartOptions
+                }
+            );
+        }
+
+        function updateCharts() {
+            // Update network chart
+            const networkEvents = state.events.filter(e => e.event_type === 'Network').length;
+            const now = new Date().toLocaleTimeString();
+
+            if (state.charts.network.data.labels.length > 20) {
+                state.charts.network.data.labels.shift();
+                state.charts.network.data.datasets[0].data.shift();
+            }
+            state.charts.network.data.labels.push(now);
+            state.charts.network.data.datasets[0].data.push(networkEvents);
+            state.charts.network.update('none');
+
+            // Update event type chart
+            const types = Object.keys(state.metrics.eventCounts);
+            state.charts.eventType.data.labels = types;
+            state.charts.eventType.data.datasets[0].data = types.map(t => state.metrics.eventCounts[t]);
+            state.charts.eventType.update('none');
+
+            // Update file access chart
+            const fileEvents = state.events.filter(e => e.event_type === 'FileAccess');
+            const allowed = fileEvents.filter(e => e.data?.FileAccess?.action === 'Allowed').length;
+            const blocked = fileEvents.filter(e => e.data?.FileAccess?.action === 'Blocked').length;
+            const quarantined = fileEvents.filter(e => e.data?.FileAccess?.action === 'Quarantined').length;
+            state.charts.fileAccess.data.datasets[0].data = [allowed, blocked, quarantined];
+            state.charts.fileAccess.update('none');
+
+            // Update resource chart
+            if (state.metrics.resources.length > 0) {
+                const labels = state.metrics.resources.map(r =>
+                    new Date(r.timestamp).toLocaleTimeString()
+                );
+                const cpuData = state.metrics.resources.map(r => r.cpu || 0);
+                const memData = state.metrics.resources.map(r => {
+                    if (r.memory) {
+                        return (r.memory.used / r.memory.total * 100);
+                    }
+                    return 0;
+                });
+
+                state.charts.resources.data.labels = labels;
+                state.charts.resources.data.datasets[0].data = cpuData;
+                state.charts.resources.data.datasets[1].data = memData;
+                state.charts.resources.update('none');
+            }
+
+            // Update security chart
+            const securityEvents = state.events.filter(e => e.event_type === 'Security');
+            const low = securityEvents.filter(e => e.data?.Security?.severity === 'Low').length;
+            const medium = securityEvents.filter(e => e.data?.Security?.severity === 'Medium').length;
+            const high = securityEvents.filter(e => e.data?.Security?.severity === 'High').length;
+            const critical = securityEvents.filter(e => e.data?.Security?.severity === 'Critical').length;
+            state.charts.security.data.datasets[0].data = [low, medium, high, critical];
+            state.charts.security.update('none');
+        }
+
+        // Tab Navigation
+        function setupTabs() {
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.addEventListener('click', () => {
+                    const tab = button.dataset.tab;
+
+                    document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+                    button.classList.add('active');
+                    document.getElementById(tab).classList.add('active');
+                });
+            });
+        }
+
+        // Event Filters
+        function setupEventFilters() {
+            document.querySelectorAll('[data-type]').forEach(tag => {
+                tag.addEventListener('click', () => {
+                    document.querySelectorAll('[data-type]').forEach(t => t.classList.remove('active'));
+                    tag.classList.add('active');
+                    state.filters.type = tag.dataset.type;
+                    updateEventsList();
+                });
+            });
+
+            document.querySelectorAll('[data-severity]').forEach(tag => {
+                tag.addEventListener('click', () => {
+                    document.querySelectorAll('[data-severity]').forEach(t => t.classList.remove('active'));
+                    tag.classList.add('active');
+                    state.filters.severity = tag.dataset.severity;
+                    updateEventsList();
+                });
+            });
+
+            document.getElementById('event-search').addEventListener('input', (e) => {
+                state.filters.search = e.target.value;
+                updateEventsList();
+            });
+
+            document.getElementById('clear-events').addEventListener('click', () => {
+                state.events = [];
+                updateEventsList();
+                updateRecentEvents();
+            });
+        }
+
+        // Utility Functions
+        function formatUptime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+
+            const parts = [];
+            if (days > 0) parts.push(`${days}d`);
+            if (hours > 0) parts.push(`${hours}h`);
+            if (minutes > 0) parts.push(`${minutes}m`);
+
+            return parts.join(' ') || '0m';
+        }
+
+        // Initialize Application
+        function init() {
+            setupTabs();
+            setupEventFilters();
+            initializeCharts();
+            connectWebSocket();
+
+            // Initial data fetch
+            fetchStatus();
+            fetchConfig();
+            fetchMetrics();
+
+            // Auto-refresh status and metrics
+            setInterval(fetchStatus, 10000);
+            setInterval(fetchMetrics, 30000);
+
+            // Keep WebSocket alive
+            setInterval(() => {
+                if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                    state.ws.send(JSON.stringify({ type: 'Ping' }));
+                }
+            }, 30000);
+        }
+
+        // Start the application
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    </script>
+</body>
+</html>

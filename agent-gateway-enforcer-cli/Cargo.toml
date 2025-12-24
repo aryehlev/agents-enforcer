@@ -30,10 +30,11 @@ agent-gateway-enforcer-common = { path = "../agent-gateway-enforcer-common" }
 
 # Platform-specific backends
 [target.'cfg(target_os = "linux")'.dependencies]
-ebpf-linux = { path = "../backends/ebpf-linux", package = "agent-gateway-enforcer-backend-ebpf-linux" }
+ebpf-linux = { path = "../backends/ebpf-linux", package = "agent-gateway-enforcer-backend-ebpf-linux", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-macos-desktop = { path = "../backends/macos-desktop", package = "agent-gateway-enforcer-backend-macos" }
+macos-desktop = { path = "../backends/macos-desktop", package = "agent-gateway-enforcer-backend-macos", optional = true }
 
 [features]
 default = []
+with-backends = ["ebpf-linux", "macos-desktop"]

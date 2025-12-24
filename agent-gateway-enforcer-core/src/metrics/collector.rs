@@ -278,11 +278,11 @@ impl MetricsCollector {
 
         // Update process and thread counts
         if let Ok(process_count) = Self::get_process_count() {
-            metrics.system.process_count.set(process_count);
+            metrics.system.process_count.set(process_count as i64);
         }
 
         if let Ok(thread_count) = Self::get_thread_count() {
-            metrics.system.thread_count.set(thread_count);
+            metrics.system.thread_count.set(thread_count as i64);
         }
 
         Ok(())

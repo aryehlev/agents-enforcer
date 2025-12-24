@@ -105,10 +105,13 @@ impl ConfigManager {
     
     /// Start configuration file watching for hot reload
     pub async fn start_hot_reload(&self) -> Result<()> {
-        use notify::{Watcher, RecursiveMode, recommended_watcher, Config, EventKind};
+        use notify::{Watcher, RecursiveMode, recommended_watcher, EventKind};
         use std::time::Duration;
         
-        let (mut watcher, mut rx) = recommended_watcher(Config::default())?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let mut watcher = recommended_watcher(move |res| {
+            let _ = tx.blocking_send(res);
+        })?;
         
         watcher.watch(&self.config_path, RecursiveMode::NonRecursive)?;
         
@@ -121,7 +124,7 @@ impl ConfigManager {
             let mut last_event = None;
             let debounce_duration = Duration::from_millis(500);
             
-            while let Ok(event) = rx.recv() {
+            while let Some(event) = rx.recv().await {
                 match event {
                     Ok(event) => {
                         if matches!(event.kind, EventKind::Modify(_)) {
@@ -156,7 +159,7 @@ impl ConfigManager {
                                     // Notify watchers of error
                                     let mut watchers = watchers.write().await;
                                     for watcher in watchers.iter_mut() {
-                                        let _ = watcher.on_config_changed(ConfigEvent::ValidationError(e)).await;
+                                        let _ = watcher.on_config_changed(ConfigEvent::ValidationError(e.to_string())).await;
                                     }
                                 }
                             }
@@ -186,7 +189,18 @@ impl ConfigManager {
     pub fn config_path(&self) -> &Path {
         &self.config_path
     }
-    
+
+    /// Get the current configuration
+    pub async fn get_current(&self) -> UnifiedConfig {
+        self.current_config.read().await.clone()
+    }
+
+    /// Update the current configuration
+    pub async fn update_current(&self, config: UnifiedConfig) -> Result<()> {
+        *self.current_config.write().await = config;
+        Ok(())
+    }
+
     /// Check if configuration file exists
     pub async fn config_exists(&self) -> bool {
         tokio::fs::metadata(&self.config_path).await.is_ok()
@@ -353,7 +367,7 @@ pub enum ConfigEvent {
     Saved(UnifiedConfig),
     Updated(UnifiedConfig),
     HotReloaded(UnifiedConfig),
-    ValidationError(anyhow::Error),
+    ValidationError(String),
 }
 
 /// Trait for configuration change watchers
@@ -379,7 +393,7 @@ impl ConfigWatcher for LoggingConfigWatcher {
             ConfigEvent::Saved(_) => tracing::info!("Configuration saved"),
             ConfigEvent::Updated(_) => tracing::info!("Configuration updated"),
             ConfigEvent::HotReloaded(_) => tracing::info!("Configuration hot-reloaded"),
-            ConfigEvent::ValidationError(e) => tracing::error!("Configuration validation error: {}", e),
+            ConfigEvent::ValidationError(ref e) => tracing::error!("Configuration validation error: {}", e),
         }
     }
 }

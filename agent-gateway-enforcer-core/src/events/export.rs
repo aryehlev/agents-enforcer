@@ -41,7 +41,7 @@ pub struct ExportConfig {
 }
 
 /// Export format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
     /// JSON format
     Json,
@@ -298,7 +298,7 @@ pub struct ExportStats {
 
 /// Export destination trait
 #[async_trait::async_trait]
-pub trait ExportDestination: Send + Sync {
+pub trait ExportDestination: std::fmt::Debug + Send + Sync {
     /// Export events to the destination
     async fn export(&self, events: &[UnifiedEvent], format: ExportFormat, options: &ExportOptions) -> crate::Result<()>;
     
@@ -348,7 +348,7 @@ impl EventExporter {
 
         {
             let mut configs = self.export_configs.write().await;
-            configs.insert(config.id.clone(), config);
+            configs.insert(config.id.clone(), config.clone());
         }
 
         {
@@ -407,14 +407,15 @@ impl EventExporter {
 
             // Export to destination
             if let Some(destination) = destinations.get(export_id) {
-                let result = destination.export(&filtered_events, config.format, &config.options).await;
+                let result = destination.export(&filtered_events, config.format.clone(), &config.options).await;
+                let result_copy = result.is_ok();
                 results.insert(export_id.clone(), result);
 
                 // Update statistics
                 {
                     let mut stats = self.stats.write().await;
                     stats.total_exports += 1;
-                    if result.is_ok() {
+                    if result_copy {
                         stats.successful_exports += 1;
                         stats.total_events_exported += filtered_events.len() as u64;
                         stats.last_export_timestamp = Some(Utc::now());
@@ -443,14 +444,15 @@ impl EventExporter {
 
             // Export to destination
             if let Some(destination) = destinations.get(export_id) {
-                let result = destination.export_aggregated(&events, config.format, &config.options).await;
+                let result = destination.export_aggregated(&events, config.format.clone(), &config.options).await;
+                let result_copy = result.is_ok();
                 results.insert(export_id.clone(), result);
 
                 // Update statistics
                 {
                     let mut stats = self.stats.write().await;
                     stats.total_exports += 1;
-                    if result.is_ok() {
+                    if result_copy {
                         stats.successful_exports += 1;
                         stats.total_events_exported += events.len() as u64;
                         stats.last_export_timestamp = Some(Utc::now());

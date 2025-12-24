@@ -16,6 +16,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
 toml = "0.8"
 
 # CLI dependencies
@@ -29,7 +30,7 @@ agent-gateway-enforcer-common = { path = "../../agent-gateway-enforcer-common" }
 
 # eBPF dependencies (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
-aya = { workspace = true }
+aya = { version = "0.12", features = ["async_tokio"] }
 nix = "0.27"
 
 [build-dependencies]
