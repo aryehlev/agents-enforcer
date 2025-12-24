@@ -1,11 +1,11 @@
 //! Integration Test Suite for Agent Gateway Enforcer
-//! 
+//!
 //! This is the main integration test suite that covers all components of the
 //! agent-gateway-enforcer system including core functionality, backends, CLI,
 //! and web interfaces.
-//! 
+//!
 //! ## Test Categories
-//! 
+//!
 //! 1. **Platform Integration Tests** - Cross-platform functionality
 //! 2. **Backend Integration Tests** - eBPF, macOS, Windows backends
 //! 3. **CLI Integration Tests** - Command-line interface functionality
@@ -15,43 +15,43 @@
 //! 7. **Metrics Collection Tests** - Metrics gathering and export
 //! 8. **Security Tests** - Security policy enforcement
 //! 9. **Performance Tests** - Performance and load testing
-//! 
+//!
 //! ## Running Tests
-//! 
+//!
 //! ```bash
 //! # Run all integration tests
 //! cargo test --test integration_suite
-//! 
+//!
 //! # Run specific test categories
 //! cargo test --test integration_suite platform
 //! cargo test --test integration_suite backend
 //! cargo test --test integration_suite cli
 //! cargo test --test integration_suite web
-//! 
+//!
 //! # Run with verbose output
 //! cargo test --test integration_suite -- --nocapture
-//! 
+//!
 //! # Run with specific features
 //! cargo test --test integration_suite --features "ebpf macos windows"
 //! ```
-//! 
+//!
 //! ## Test Environment Requirements
-//! 
+//!
 //! ### Linux (eBPF Tests)
 //! - Linux kernel 5.8+
 //! - Root privileges or CAP_BPF capability
 //! - eBPF program built: `cargo xtask build-ebpf`
-//! 
+//!
 //! ### macOS (macOS Backend Tests)
 //! - macOS 10.15+
 //! - Swift/Objective-C runtime for system integration
-//! 
+//!
 //! ### Windows (Windows Backend Tests)
 //! - Windows 10+
 //! - Administrator privileges for API hooks
-//! 
+//!
 //! ## Test Utilities
-//! 
+//!
 //! The test suite provides utilities for:
 //! - Temporary file and directory management
 //! - Mock backend implementations
@@ -68,15 +68,18 @@ use std::time::Duration;
 mod test_utils;
 
 // Test modules
-mod platform_tests;
+// TODO: Add platform_tests when implemented
+// mod platform_tests;
 mod backend_integration_tests;
 mod cli_integration_tests;
-mod web_interface_tests;
 mod configuration_tests;
 mod event_system_tests;
 mod metrics_tests;
-mod security_tests;
-mod performance_tests;
+mod web_interface_tests;
+// TODO: Add security_tests when implemented
+// mod security_tests;
+// TODO: Add performance_tests when implemented
+// mod performance_tests;
 
 /// Test configuration and environment setup
 #[derive(Debug, Clone)]
@@ -121,7 +124,7 @@ impl TestConfig {
             .join("agent-gateway-enforcer-tests")
             .to_string_lossy()
             .to_string();
-            
+
         Self {
             temp_dir,
             base_port: 18080,
@@ -138,10 +141,10 @@ impl PlatformTestConfig {
         let is_linux = cfg!(target_os = "linux");
         let is_macos = cfg!(target_os = "macos");
         let is_windows = cfg!(target_os = "windows");
-        
+
         let has_privileges = detect_privileges();
         let ebpf_available = is_linux && has_privileges && ebpf_program_exists();
-        
+
         Self {
             run_linux_tests: is_linux,
             run_macos_tests: is_macos,
@@ -263,10 +266,10 @@ fn setup_test_environment() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init();
-        
+
     // Create temporary directory if it doesn't exist
     let temp_dir = Path::new(&test_config().temp_dir);
     if !temp_dir.exists() {
@@ -281,7 +284,7 @@ fn cleanup_test_environment() {
     if test_config().ci_mode {
         return;
     }
-    
+
     // Cleanup temporary directory
     let temp_dir = Path::new(&test_config().temp_dir);
     if temp_dir.exists() {
@@ -297,14 +300,14 @@ fn cleanup_test_environment() {
 #[test]
 fn test_environment_detection() {
     let config = test_config();
-    
+
     println!("=== Agent Gateway Enforcer Integration Test Environment ===");
     println!("Temp Directory: {}", config.temp_dir);
     println!("Base Port: {}", config.base_port);
     println!("CI Mode: {}", config.ci_mode);
     println!("Test Timeout: {:?}", config.timeout);
     println!();
-    
+
     println!("=== Platform Configuration ===");
     println!("Linux Tests: {}", config.platform.run_linux_tests);
     println!("macOS Tests: {}", config.platform.run_macos_tests);
@@ -312,7 +315,7 @@ fn test_environment_detection() {
     println!("Has Privileges: {}", config.platform.has_privileges);
     println!("eBPF Available: {}", config.platform.ebpf_available);
     println!();
-    
+
     // Basic assertions
     assert!(!config.temp_dir.is_empty());
     assert!(config.base_port > 0);
@@ -329,19 +332,19 @@ fn test_dependency_availability() {
         let _gateway_key = GatewayKey::new(0, 8080);
         let _path_key = PathKey::new("/test");
     }
-    
+
     // Test that core library is available
     #[cfg(feature = "core")]
     {
         // Add core library test when available
     }
-    
+
     // Test that CLI components are available
     #[cfg(feature = "cli")]
     {
         // Add CLI test when available
     }
-    
+
     println!("All required dependencies are available");
 }
 
@@ -353,49 +356,49 @@ fn test_dependency_availability() {
 #[cfg(test)]
 mod test_runner {
     use super::*;
-    
-    #[test]
-    fn run_all_platform_tests() {
-        platform_tests::run_all_platform_tests();
-    }
-    
+
+    // #[test]
+    // fn run_all_platform_tests() {
+    //     platform_tests::run_all_platform_tests();
+    // }
+
     #[test]
     fn run_all_backend_tests() {
         backend_integration_tests::run_all_backend_tests();
     }
-    
+
     #[test]
     fn run_all_cli_tests() {
         cli_integration_tests::run_all_cli_tests();
     }
-    
+
     #[test]
     fn run_all_web_interface_tests() {
         web_interface_tests::run_all_web_interface_tests();
     }
-    
+
     #[test]
     fn run_all_configuration_tests() {
         configuration_tests::run_all_configuration_tests();
     }
-    
+
     #[test]
     fn run_all_event_system_tests() {
         event_system_tests::run_all_event_system_tests();
     }
-    
+
     #[test]
     fn run_all_metrics_tests() {
         metrics_tests::run_all_metrics_tests();
     }
-    
-    #[test]
-    fn run_all_security_tests() {
-        security_tests::run_all_security_tests();
-    }
-    
-    #[test]
-    fn run_all_performance_tests() {
-        performance_tests::run_all_performance_tests();
-    }
+
+    // #[test]
+    // fn run_all_security_tests() {
+    //     security_tests::run_all_security_tests();
+    // }
+
+    // #[test]
+    // fn run_all_performance_tests() {
+    //     performance_tests::run_all_performance_tests();
+    // }
 }

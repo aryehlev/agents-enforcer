@@ -454,10 +454,18 @@ fn test_multiple_metric_registries() {
     let metrics2 = UnifiedMetrics::new().unwrap();
 
     // Modify metrics1
-    metrics1.events.events_total.with_label_values(&["m1"]).inc();
+    metrics1
+        .events
+        .events_total
+        .with_label_values(&["m1"])
+        .inc();
 
     // Modify metrics2
-    metrics2.events.events_total.with_label_values(&["m2"]).inc();
+    metrics2
+        .events
+        .events_total
+        .with_label_values(&["m2"])
+        .inc();
 
     // Verify they're independent
     let export1 = metrics1.export_prometheus().unwrap();

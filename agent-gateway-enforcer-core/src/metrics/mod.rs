@@ -6,14 +6,14 @@ pub mod registry;
 pub mod types;
 
 use prometheus::{
-    CounterVec, Gauge, GaugeVec, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
-    IntGauge, IntGaugeVec, Opts, Registry,
+    CounterVec, Gauge, GaugeVec, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge,
+    IntGaugeVec, Opts, Registry,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
 
 pub use collector::MetricsCollector;
 pub use exporter::MetricsExporter;
@@ -233,14 +233,15 @@ impl UnifiedMetrics {
     /// Export metrics in Prometheus format
     pub fn export_prometheus(&self) -> crate::Result<String> {
         use prometheus::Encoder;
-        
+
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
         let mut buffer = Vec::new();
-        
-        encoder.encode(&metric_families, &mut buffer)
+
+        encoder
+            .encode(&metric_families, &mut buffer)
             .map_err(|e| anyhow::anyhow!(format!("Failed to encode metrics: {}", e)))?;
-        
+
         String::from_utf8(buffer)
             .map_err(|e| anyhow::anyhow!(format!("Failed to convert metrics to string: {}", e)))
     }
@@ -255,7 +256,10 @@ impl Default for UnifiedMetrics {
 impl EventMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let events_total = IntCounterVec::new(
-            Opts::new("agent_gateway_events_total", "Total number of events processed"),
+            Opts::new(
+                "agent_gateway_events_total",
+                "Total number of events processed",
+            ),
             &["component"],
         )?;
         registry.register(Box::new(events_total.clone()))?;
@@ -267,20 +271,29 @@ impl EventMetrics {
         registry.register(Box::new(events_by_type.clone()))?;
 
         let events_by_source = IntCounterVec::new(
-            Opts::new("agent_gateway_events_by_source_total", "Total events by source"),
+            Opts::new(
+                "agent_gateway_events_by_source_total",
+                "Total events by source",
+            ),
             &["source"],
         )?;
         registry.register(Box::new(events_by_source.clone()))?;
 
         let events_by_severity = IntCounterVec::new(
-            Opts::new("agent_gateway_events_by_severity_total", "Total events by severity"),
+            Opts::new(
+                "agent_gateway_events_by_severity_total",
+                "Total events by severity",
+            ),
             &["severity"],
         )?;
         registry.register(Box::new(events_by_severity.clone()))?;
 
         let event_processing_duration = HistogramVec::new(
-            HistogramOpts::new("agent_gateway_event_processing_duration_seconds", "Event processing duration in seconds")
-                .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
+            HistogramOpts::new(
+                "agent_gateway_event_processing_duration_seconds",
+                "Event processing duration in seconds",
+            )
+            .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
             &["event_type", "component"],
         )?;
         registry.register(Box::new(event_processing_duration.clone()))?;
@@ -305,13 +318,19 @@ impl EventMetrics {
 impl NetworkMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let network_blocked_total = IntCounterVec::new(
-            Opts::new("agent_gateway_network_blocked_total", "Total network connections blocked"),
+            Opts::new(
+                "agent_gateway_network_blocked_total",
+                "Total network connections blocked",
+            ),
             &["protocol", "dst_port", "src_ip"],
         )?;
         registry.register(Box::new(network_blocked_total.clone()))?;
 
         let network_allowed_total = IntCounterVec::new(
-            Opts::new("agent_gateway_network_allowed_total", "Total network connections allowed"),
+            Opts::new(
+                "agent_gateway_network_allowed_total",
+                "Total network connections allowed",
+            ),
             &["protocol", "dst_port", "src_ip"],
         )?;
         registry.register(Box::new(network_allowed_total.clone()))?;
@@ -323,14 +342,20 @@ impl NetworkMetrics {
         registry.register(Box::new(network_rate_limited_total.clone()))?;
 
         let network_connection_duration = HistogramVec::new(
-            HistogramOpts::new("agent_gateway_network_connection_duration_seconds", "Network connection duration in seconds")
-                .buckets(vec![0.1, 1.0, 10.0, 60.0, 300.0]), // Buckets from 100ms to 5 minutes
+            HistogramOpts::new(
+                "agent_gateway_network_connection_duration_seconds",
+                "Network connection duration in seconds",
+            )
+            .buckets(vec![0.1, 1.0, 10.0, 60.0, 300.0]), // Buckets from 100ms to 5 minutes
             &["protocol", "dst_port"],
         )?;
         registry.register(Box::new(network_connection_duration.clone()))?;
 
         let network_bytes_transferred = CounterVec::new(
-            Opts::new("agent_gateway_network_bytes_transferred_total", "Total network bytes transferred"),
+            Opts::new(
+                "agent_gateway_network_bytes_transferred_total",
+                "Total network bytes transferred",
+            ),
             &["direction", "protocol"],
         )?;
         registry.register(Box::new(network_bytes_transferred.clone()))?;
@@ -362,13 +387,19 @@ impl NetworkMetrics {
 impl FileMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let file_blocked_total = IntCounterVec::new(
-            Opts::new("agent_gateway_file_blocked_total", "Total file accesses blocked"),
+            Opts::new(
+                "agent_gateway_file_blocked_total",
+                "Total file accesses blocked",
+            ),
             &["access_type", "file_extension"],
         )?;
         registry.register(Box::new(file_blocked_total.clone()))?;
 
         let file_allowed_total = IntCounterVec::new(
-            Opts::new("agent_gateway_file_allowed_total", "Total file accesses allowed"),
+            Opts::new(
+                "agent_gateway_file_allowed_total",
+                "Total file accesses allowed",
+            ),
             &["access_type", "file_extension"],
         )?;
         registry.register(Box::new(file_allowed_total.clone()))?;
@@ -380,14 +411,20 @@ impl FileMetrics {
         registry.register(Box::new(file_quarantined_total.clone()))?;
 
         let file_access_duration = HistogramVec::new(
-            HistogramOpts::new("agent_gateway_file_access_duration_seconds", "File access duration in seconds")
-                .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
+            HistogramOpts::new(
+                "agent_gateway_file_access_duration_seconds",
+                "File access duration in seconds",
+            )
+            .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
             &["access_type"],
         )?;
         registry.register(Box::new(file_access_duration.clone()))?;
 
         let file_bytes_accessed = CounterVec::new(
-            Opts::new("agent_gateway_file_bytes_accessed_total", "Total file bytes accessed"),
+            Opts::new(
+                "agent_gateway_file_bytes_accessed_total",
+                "Total file bytes accessed",
+            ),
             &["access_type", "direction"],
         )?;
         registry.register(Box::new(file_bytes_accessed.clone()))?;
@@ -399,7 +436,10 @@ impl FileMetrics {
         registry.register(Box::new(file_active_operations.clone()))?;
 
         let file_system_errors_total = IntCounterVec::new(
-            Opts::new("agent_gateway_file_system_errors_total", "Total file system errors"),
+            Opts::new(
+                "agent_gateway_file_system_errors_total",
+                "Total file system errors",
+            ),
             &["error_type", "operation"],
         )?;
         registry.register(Box::new(file_system_errors_total.clone()))?;
@@ -436,10 +476,8 @@ impl SystemMetrics {
         )?;
         registry.register(Box::new(memory_usage_bytes.clone()))?;
 
-        let cpu_usage_percentage = Gauge::new(
-            "agent_gateway_cpu_usage_percentage",
-            "CPU usage percentage",
-        )?;
+        let cpu_usage_percentage =
+            Gauge::new("agent_gateway_cpu_usage_percentage", "CPU usage percentage")?;
         registry.register(Box::new(cpu_usage_percentage.clone()))?;
 
         let disk_usage_bytes = GaugeVec::new(
@@ -449,21 +487,18 @@ impl SystemMetrics {
         registry.register(Box::new(disk_usage_bytes.clone()))?;
 
         let network_interface_bytes = CounterVec::new(
-            Opts::new("agent_gateway_network_interface_bytes_total", "Network interface bytes total"),
+            Opts::new(
+                "agent_gateway_network_interface_bytes_total",
+                "Network interface bytes total",
+            ),
             &["interface", "direction"], // tx, rx
         )?;
         registry.register(Box::new(network_interface_bytes.clone()))?;
 
-        let process_count = IntGauge::new(
-            "agent_gateway_process_count",
-            "Number of processes",
-        )?;
+        let process_count = IntGauge::new("agent_gateway_process_count", "Number of processes")?;
         registry.register(Box::new(process_count.clone()))?;
 
-        let thread_count = IntGauge::new(
-            "agent_gateway_thread_count",
-            "Number of threads",
-        )?;
+        let thread_count = IntGauge::new("agent_gateway_thread_count", "Number of threads")?;
         registry.register(Box::new(thread_count.clone()))?;
 
         Ok(Self {
@@ -482,8 +517,11 @@ impl SystemMetrics {
 impl PerformanceMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let request_duration = HistogramVec::new(
-            HistogramOpts::new("agent_gateway_request_duration_seconds", "Request duration in seconds")
-                .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
+            HistogramOpts::new(
+                "agent_gateway_request_duration_seconds",
+                "Request duration in seconds",
+            )
+            .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]), // Buckets from 1ms to 10s
             &["endpoint", "method"],
         )?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -507,14 +545,22 @@ impl PerformanceMetrics {
         registry.register(Box::new(throughput.clone()))?;
 
         let latency_percentiles = HistogramVec::new(
-            HistogramOpts::new("agent_gateway_latency_seconds", "Request latency in seconds")
-                .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
+            HistogramOpts::new(
+                "agent_gateway_latency_seconds",
+                "Request latency in seconds",
+            )
+            .buckets(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
             &["operation"],
         )?;
         registry.register(Box::new(latency_percentiles.clone()))?;
 
         let resource_utilization = GaugeVec::new(
-            Opts::new("agent_gateway_resource_utilization_percentage", "Resource utilization percentage"),
+            Opts::new(
+                "agent_gateway_resource_utilization_percentage",
+                "Resource utilization percentage",
+            ),
             &["resource"], // cpu, memory, disk, network
         )?;
         registry.register(Box::new(resource_utilization.clone()))?;
@@ -533,20 +579,29 @@ impl PerformanceMetrics {
 impl BackendMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let backend_status = IntGaugeVec::new(
-            Opts::new("agent_gateway_backend_status", "Backend status (0=stopped, 1=running, 2=error)"),
+            Opts::new(
+                "agent_gateway_backend_status",
+                "Backend status (0=stopped, 1=running, 2=error)",
+            ),
             &["backend_name", "backend_type"],
         )?;
         registry.register(Box::new(backend_status.clone()))?;
 
         let backend_health_check_duration = HistogramVec::new(
-            HistogramOpts::new("agent_gateway_backend_health_check_duration_seconds", "Backend health check duration in seconds")
-                .buckets(vec![0.01, 0.1, 1.0, 5.0, 10.0]), // Buckets from 10ms to 10s
+            HistogramOpts::new(
+                "agent_gateway_backend_health_check_duration_seconds",
+                "Backend health check duration in seconds",
+            )
+            .buckets(vec![0.01, 0.1, 1.0, 5.0, 10.0]), // Buckets from 10ms to 10s
             &["backend_name"],
         )?;
         registry.register(Box::new(backend_health_check_duration.clone()))?;
 
         let backend_operations_total = IntCounterVec::new(
-            Opts::new("agent_gateway_backend_operations_total", "Total backend operations"),
+            Opts::new(
+                "agent_gateway_backend_operations_total",
+                "Total backend operations",
+            ),
             &["backend_name", "operation_type"],
         )?;
         registry.register(Box::new(backend_operations_total.clone()))?;
@@ -558,7 +613,10 @@ impl BackendMetrics {
         registry.register(Box::new(backend_errors_total.clone()))?;
 
         let backend_active_connections = IntGaugeVec::new(
-            Opts::new("agent_gateway_backend_active_connections", "Active backend connections"),
+            Opts::new(
+                "agent_gateway_backend_active_connections",
+                "Active backend connections",
+            ),
             &["backend_name"],
         )?;
         registry.register(Box::new(backend_active_connections.clone()))?;
@@ -583,25 +641,37 @@ impl BackendMetrics {
 impl SecurityMetrics {
     fn new(registry: &Registry) -> crate::Result<Self> {
         let security_events_total = IntCounterVec::new(
-            Opts::new("agent_gateway_security_events_total", "Total security events"),
+            Opts::new(
+                "agent_gateway_security_events_total",
+                "Total security events",
+            ),
             &["event_type", "severity"],
         )?;
         registry.register(Box::new(security_events_total.clone()))?;
 
         let threats_detected_total = IntCounterVec::new(
-            Opts::new("agent_gateway_threats_detected_total", "Total threats detected"),
+            Opts::new(
+                "agent_gateway_threats_detected_total",
+                "Total threats detected",
+            ),
             &["threat_type", "severity"],
         )?;
         registry.register(Box::new(threats_detected_total.clone()))?;
 
         let security_violations_total = IntCounterVec::new(
-            Opts::new("agent_gateway_security_violations_total", "Total security violations"),
+            Opts::new(
+                "agent_gateway_security_violations_total",
+                "Total security violations",
+            ),
             &["violation_type"],
         )?;
         registry.register(Box::new(security_violations_total.clone()))?;
 
         let blocked_attempts_total = IntCounterVec::new(
-            Opts::new("agent_gateway_blocked_attempts_total", "Total blocked attempts"),
+            Opts::new(
+                "agent_gateway_blocked_attempts_total",
+                "Total blocked attempts",
+            ),
             &["attempt_type", "source"],
         )?;
         registry.register(Box::new(blocked_attempts_total.clone()))?;
@@ -612,10 +682,8 @@ impl SecurityMetrics {
         )?;
         registry.register(Box::new(security_score.clone()))?;
 
-        let active_threats = IntGauge::new(
-            "agent_gateway_active_threats",
-            "Number of active threats",
-        )?;
+        let active_threats =
+            IntGauge::new("agent_gateway_active_threats", "Number of active threats")?;
         registry.register(Box::new(active_threats.clone()))?;
 
         Ok(Self {
@@ -669,37 +737,49 @@ impl Metrics {
     /// Create a new metrics collector
     pub fn new() -> crate::Result<Self> {
         let registry = Registry::new();
-        
+
         let network_blocked = IntCounterVec::new(
-            Opts::new("agent_gateway_network_blocked_total", "Total network connections blocked"),
+            Opts::new(
+                "agent_gateway_network_blocked_total",
+                "Total network connections blocked",
+            ),
             &["dst_ip", "dst_port", "protocol"],
         )?;
         registry.register(Box::new(network_blocked.clone()))?;
-        
+
         let network_allowed = IntCounterVec::new(
-            Opts::new("agent_gateway_network_allowed_total", "Total network connections allowed"),
+            Opts::new(
+                "agent_gateway_network_allowed_total",
+                "Total network connections allowed",
+            ),
             &["dst_ip", "dst_port", "protocol"],
         )?;
         registry.register(Box::new(network_allowed.clone()))?;
-        
+
         let file_blocked = IntCounterVec::new(
-            Opts::new("agent_gateway_file_blocked_total", "Total file accesses blocked"),
+            Opts::new(
+                "agent_gateway_file_blocked_total",
+                "Total file accesses blocked",
+            ),
             &["path", "access_type"],
         )?;
         registry.register(Box::new(file_blocked.clone()))?;
-        
+
         let file_allowed = IntCounterVec::new(
-            Opts::new("agent_gateway_file_allowed_total", "Total file accesses allowed"),
+            Opts::new(
+                "agent_gateway_file_allowed_total",
+                "Total file accesses allowed",
+            ),
             &["path", "access_type"],
         )?;
         registry.register(Box::new(file_allowed.clone()))?;
-        
+
         let backend_status = IntGauge::new(
             "agent_gateway_backend_status",
             "Backend status (0 = stopped, 1 = running)",
         )?;
         registry.register(Box::new(backend_status.clone()))?;
-        
+
         Ok(Self {
             registry,
             network_blocked,
@@ -724,7 +804,7 @@ mod tests {
     #[test]
     fn test_unified_metrics_creation() {
         let metrics = UnifiedMetrics::new().unwrap();
-        
+
         // Test that all metric types are created
         assert!(!metrics.events.events_total.get().is_empty());
         assert!(!metrics.network.network_blocked_total.get().is_empty());
@@ -735,7 +815,7 @@ mod tests {
     fn test_metrics_summary() {
         let metrics = UnifiedMetrics::new().unwrap();
         let summary = metrics.get_summary();
-        
+
         // Test summary structure
         assert_eq!(summary.total_events, 0);
         assert_eq!(summary.network_blocked, 0);
@@ -746,7 +826,7 @@ mod tests {
     fn test_prometheus_export() {
         let metrics = UnifiedMetrics::new().unwrap();
         let exported = metrics.export_prometheus().unwrap();
-        
+
         // Test that export contains metric names
         assert!(exported.contains("agent_gateway_events_total"));
         assert!(exported.contains("agent_gateway_network_blocked_total"));
@@ -756,7 +836,7 @@ mod tests {
     #[test]
     fn test_legacy_metrics() {
         let metrics = Metrics::new().unwrap();
-        
+
         // Test legacy metrics structure
         assert!(!metrics.network_blocked.get().is_empty());
         assert!(!metrics.network_allowed.get().is_empty());

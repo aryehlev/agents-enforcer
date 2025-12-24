@@ -1,11 +1,11 @@
 //! Metrics collector for unified metrics system
 
-use crate::metrics::{UnifiedMetrics, MetricsSummary};
+use crate::metrics::{MetricsSummary, UnifiedMetrics};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::interval;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 /// Metrics collector for gathering and updating metrics
 #[derive(Debug)]
@@ -110,7 +110,10 @@ impl MetricsCollector {
             state.is_running = true;
         }
 
-        info!("Starting metrics collector with interval {:?}", self.config.collection_interval);
+        info!(
+            "Starting metrics collector with interval {:?}",
+            self.config.collection_interval
+        );
 
         let metrics = self.metrics.clone();
         let config = self.config.clone();
@@ -152,7 +155,7 @@ impl MetricsCollector {
                     } else {
                         stats_guard.failed_collections += 1;
                         state_guard.collection_errors += 1;
-                        
+
                         if let Err(e) = &collection_result {
                             let error_type = "collection_error".to_string();
                             *stats_guard.collection_errors.entry(error_type).or_insert(0) += 1;
@@ -164,16 +167,14 @@ impl MetricsCollector {
                     let total_collections = stats_guard.total_collections as f64;
                     let current_avg = stats_guard.avg_collection_duration_ms;
                     let new_duration_ms = collection_duration.as_millis() as f64;
-                    stats_guard.avg_collection_duration_ms = 
-                        (current_avg * (total_collections - 1.0) + new_duration_ms) / total_collections;
+                    stats_guard.avg_collection_duration_ms =
+                        (current_avg * (total_collections - 1.0) + new_duration_ms)
+                            / total_collections;
 
                     stats_guard.last_collection_timestamp = Some(chrono::Utc::now());
                 }
 
-                debug!(
-                    "Metrics collection completed in {:?}",
-                    collection_duration
-                );
+                debug!("Metrics collection completed in {:?}", collection_duration);
             }
         });
 
@@ -211,7 +212,10 @@ impl MetricsCollector {
     }
 
     /// Collect metrics based on configuration
-    async fn collect_metrics(metrics: &UnifiedMetrics, config: &CollectorConfig) -> crate::Result<()> {
+    async fn collect_metrics(
+        metrics: &UnifiedMetrics,
+        config: &CollectorConfig,
+    ) -> crate::Result<()> {
         let mut errors = Vec::new();
 
         // Collect system metrics
@@ -258,10 +262,26 @@ impl MetricsCollector {
 
         // Update memory usage
         if let Ok(memory_info) = Self::get_memory_info() {
-            metrics.system.memory_usage_bytes.with_label_values(&["total"]).set(memory_info.total as f64);
-            metrics.system.memory_usage_bytes.with_label_values(&["used"]).set(memory_info.used as f64);
-            metrics.system.memory_usage_bytes.with_label_values(&["free"]).set(memory_info.free as f64);
-            metrics.system.memory_usage_bytes.with_label_values(&["available"]).set(memory_info.available as f64);
+            metrics
+                .system
+                .memory_usage_bytes
+                .with_label_values(&["total"])
+                .set(memory_info.total as f64);
+            metrics
+                .system
+                .memory_usage_bytes
+                .with_label_values(&["used"])
+                .set(memory_info.used as f64);
+            metrics
+                .system
+                .memory_usage_bytes
+                .with_label_values(&["free"])
+                .set(memory_info.free as f64);
+            metrics
+                .system
+                .memory_usage_bytes
+                .with_label_values(&["available"])
+                .set(memory_info.available as f64);
         }
 
         // Update CPU usage
@@ -271,9 +291,21 @@ impl MetricsCollector {
 
         // Update load average
         if let Ok(load_avg) = Self::get_load_average() {
-            metrics.system.system_load_average.with_label_values(&["1m"]).set(load_avg.0);
-            metrics.system.system_load_average.with_label_values(&["5m"]).set(load_avg.1);
-            metrics.system.system_load_average.with_label_values(&["15m"]).set(load_avg.2);
+            metrics
+                .system
+                .system_load_average
+                .with_label_values(&["1m"])
+                .set(load_avg.0);
+            metrics
+                .system
+                .system_load_average
+                .with_label_values(&["5m"])
+                .set(load_avg.1);
+            metrics
+                .system
+                .system_load_average
+                .with_label_values(&["15m"])
+                .set(load_avg.2);
         }
 
         // Update process and thread counts
@@ -292,17 +324,33 @@ impl MetricsCollector {
     async fn collect_performance_metrics(metrics: &UnifiedMetrics) -> crate::Result<()> {
         // Update resource utilization
         if let Ok(cpu_util) = Self::get_cpu_usage() {
-            metrics.performance.resource_utilization.with_label_values(&["cpu"]).set(cpu_util);
+            metrics
+                .performance
+                .resource_utilization
+                .with_label_values(&["cpu"])
+                .set(cpu_util);
         }
 
         if let Ok(memory_info) = Self::get_memory_info() {
             let memory_util = (memory_info.used as f64 / memory_info.total as f64) * 100.0;
-            metrics.performance.resource_utilization.with_label_values(&["memory"]).set(memory_util);
+            metrics
+                .performance
+                .resource_utilization
+                .with_label_values(&["memory"])
+                .set(memory_util);
         }
 
         // Update throughput metrics (placeholder - would be calculated from actual operations)
-        metrics.performance.throughput.with_label_values(&["events"]).set(0.0);
-        metrics.performance.throughput.with_label_values(&["requests"]).set(0.0);
+        metrics
+            .performance
+            .throughput
+            .with_label_values(&["events"])
+            .set(0.0);
+        metrics
+            .performance
+            .throughput
+            .with_label_values(&["requests"])
+            .set(0.0);
 
         Ok(())
     }
@@ -311,10 +359,18 @@ impl MetricsCollector {
     async fn collect_backend_metrics(metrics: &UnifiedMetrics) -> crate::Result<()> {
         // This would typically query backend status from the backend registry
         // For now, we'll set placeholder values
-        
+
         // Example: Update backend status for known backends
-        metrics.backends.backend_status.with_label_values(&["ebpf-linux", "ebpf"]).set(0);
-        metrics.backends.backend_status.with_label_values(&["macos-desktop", "desktop"]).set(0);
+        metrics
+            .backends
+            .backend_status
+            .with_label_values(&["ebpf-linux", "ebpf"])
+            .set(0);
+        metrics
+            .backends
+            .backend_status
+            .with_label_values(&["macos-desktop", "desktop"])
+            .set(0);
 
         Ok(())
     }
@@ -335,33 +391,29 @@ impl MetricsCollector {
         #[cfg(target_os = "linux")]
         {
             let mut uptime = std::mem::MaybeUninit::<libc::timespec>::uninit();
-            let result = unsafe {
-                libc::clock_gettime(libc::CLOCK_BOOTTIME, uptime.as_mut_ptr())
-            };
-            
+            let result = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, uptime.as_mut_ptr()) };
+
             if result != 0 {
                 return Err(anyhow::anyhow!("Failed to get system uptime"));
             }
-            
+
             let uptime = unsafe { uptime.assume_init() };
             Ok(uptime.tv_sec as f64 + uptime.tv_nsec as f64 / 1_000_000_000.0)
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             let mut uptime = std::mem::MaybeUninit::<libc::timespec>::uninit();
-            let result = unsafe {
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, uptime.as_mut_ptr())
-            };
-            
+            let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, uptime.as_mut_ptr()) };
+
             if result != 0 {
                 return Err(anyhow::anyhow!("Failed to get system uptime"));
             }
-            
+
             let uptime = unsafe { uptime.assume_init() };
             Ok(uptime.tv_sec as f64 + uptime.tv_nsec as f64 / 1_000_000_000.0)
         }
-        
+
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             Err(anyhow::anyhow!("Uptime not supported on this platform"))
@@ -373,9 +425,9 @@ impl MetricsCollector {
         // Simplified memory info that works across platforms
         // In a real implementation, you'd use platform-specific APIs
         Ok(MemoryInfo {
-            total: 8 * 1024 * 1024 * 1024, // 8GB default
-            used: 4 * 1024 * 1024 * 1024, // 4GB used
-            free: 4 * 1024 * 1024 * 1024, // 4GB free
+            total: 8 * 1024 * 1024 * 1024,     // 8GB default
+            used: 4 * 1024 * 1024 * 1024,      // 4GB used
+            free: 4 * 1024 * 1024 * 1024,      // 4GB free
             available: 4 * 1024 * 1024 * 1024, // 4GB available
         })
     }
@@ -392,10 +444,9 @@ impl MetricsCollector {
         #[cfg(unix)]
         {
             let mut loadavg = std::mem::MaybeUninit::<[libc::c_double; 3]>::uninit();
-            let result = unsafe {
-                libc::getloadavg(loadavg.as_mut_ptr() as *mut libc::c_double, 3)
-            };
-            
+            let result =
+                unsafe { libc::getloadavg(loadavg.as_mut_ptr() as *mut libc::c_double, 3) };
+
             if result == 3 {
                 let loadavg = unsafe { loadavg.assume_init() };
                 Ok((loadavg[0], loadavg[1], loadavg[2]))
@@ -403,7 +454,7 @@ impl MetricsCollector {
                 Err(anyhow::anyhow!("Failed to get load average".to_string()))
             }
         }
-        
+
         #[cfg(not(unix))]
         {
             // Fallback for non-Unix systems
@@ -444,7 +495,7 @@ mod tests {
     async fn test_metrics_collector_creation() {
         let metrics = Arc::new(UnifiedMetrics::new().unwrap());
         let collector = MetricsCollector::new_default(metrics);
-        
+
         assert!(!collector.is_running().await);
     }
 
@@ -452,11 +503,11 @@ mod tests {
     async fn test_metrics_collector_start_stop() {
         let metrics = Arc::new(UnifiedMetrics::new().unwrap());
         let collector = MetricsCollector::new_default(metrics);
-        
+
         // Start collector
         collector.start().await.unwrap();
         assert!(collector.is_running().await);
-        
+
         // Stop collector
         collector.stop().await.unwrap();
         assert!(!collector.is_running().await);
@@ -466,7 +517,7 @@ mod tests {
     async fn test_metrics_collection_once() {
         let metrics = Arc::new(UnifiedMetrics::new().unwrap());
         let collector = MetricsCollector::new_default(metrics);
-        
+
         // Collect metrics once
         let result = collector.collect_once().await;
         assert!(result.is_ok());
@@ -476,7 +527,7 @@ mod tests {
     async fn test_collector_stats() {
         let metrics = Arc::new(UnifiedMetrics::new().unwrap());
         let collector = MetricsCollector::new_default(metrics);
-        
+
         let stats = collector.stats().await;
         assert_eq!(stats.total_collections, 0);
         assert_eq!(stats.successful_collections, 0);

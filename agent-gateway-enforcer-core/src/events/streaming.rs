@@ -1,13 +1,13 @@
 //! Event streaming for real-time UI updates
 
-use crate::events::{UnifiedEvent, EventFilter, EventBusHandle};
+use crate::events::{EventBusHandle, EventFilter, UnifiedEvent};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 
 /// Event streamer for real-time event distribution
 #[derive(Debug)]
@@ -77,13 +77,14 @@ pub struct StreamHandle {
 impl StreamHandle {
     /// Create a new subscription to this stream
     pub async fn resubscribe(&self) -> Option<Self> {
-        self.streamer.subscribe_to_stream(self.id).await.map(|receiver| {
-            Self {
+        self.streamer
+            .subscribe_to_stream(self.id)
+            .await
+            .map(|receiver| Self {
                 id: self.id,
                 receiver,
                 streamer: self.streamer.clone(),
-            }
-        })
+            })
     }
 }
 
@@ -147,9 +148,7 @@ impl EventStreamer {
         {
             let streams = self.streams.read().await;
             if streams.len() >= self.config.max_streams {
-                return Err(anyhow::anyhow!(
-                    "Maximum number of streams reached"
-                ));
+                return Err(anyhow::anyhow!("Maximum number of streams reached"));
             }
         }
 
@@ -210,7 +209,10 @@ impl EventStreamer {
     }
 
     /// Subscribe to an existing stream by ID
-    pub async fn subscribe_to_stream(&self, stream_id: Uuid) -> Option<broadcast::Receiver<StreamedEvent>> {
+    pub async fn subscribe_to_stream(
+        &self,
+        stream_id: Uuid,
+    ) -> Option<broadcast::Receiver<StreamedEvent>> {
         let streams = self.streams.read().await;
         streams.get(&stream_id).map(|info| info.sender.subscribe())
     }
@@ -241,10 +243,10 @@ impl EventStreamer {
         tokio::spawn(async move {
             while let Ok(event) = receiver.recv().await {
                 let streams_guard = streams.read().await;
-                
+
                 // Collect stream IDs that need updates
                 let mut successful_streams = Vec::new();
-                
+
                 // Send event to all matching streams
                 for stream_info in streams_guard.values() {
                     // Check if event matches the stream's filter
@@ -275,7 +277,7 @@ impl EventStreamer {
                         successful_streams.push(stream_info.id);
                     }
                 }
-                
+
                 // Update stream statistics outside the loop
                 if !successful_streams.is_empty() {
                     drop(streams_guard);
@@ -317,10 +319,10 @@ impl EventStreamer {
                     let streams_guard = streams.read().await;
                     for (stream_id, stream_info) in streams_guard.iter() {
                         let age_seconds = (now - stream_info.last_activity).num_seconds() as u64;
-                        
+
                         // Remove stream if it's too old or has too many events
-                        if age_seconds > timeout_seconds
-                            || stream_info.events_sent > 1000 // Hardcoded limit
+                        if age_seconds > timeout_seconds || stream_info.events_sent > 1000
+                        // Hardcoded limit
                         {
                             streams_to_remove.push(*stream_id);
                         }
@@ -366,8 +368,7 @@ impl StreamHandle {
 
     /// Convert to a stream
     pub fn into_stream(self) -> impl futures::Stream<Item = StreamedEvent> {
-        BroadcastStream::new(self.receiver)
-            .filter_map(|result| result.ok())
+        BroadcastStream::new(self.receiver).filter_map(|result| result.ok())
     }
 
     /// Get stream statistics
@@ -439,7 +440,7 @@ impl WebSocketStreamer {
         let stream_handle = StreamHandle {
             id: connection_id,
             receiver: stream_handle,
-            streamer: self.event_streamer.clone()
+            streamer: self.event_streamer.clone(),
         };
         let connection = WebSocketConnection {
             id: connection_id,
@@ -496,7 +497,7 @@ impl WebSocketStreamer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{EventBus, EventFilter, EventTypeFilter, SystemAction, EventSource};
+    use crate::events::{EventBus, EventFilter, EventSource, EventTypeFilter, SystemAction};
 
     #[tokio::test]
     async fn test_event_streamer_basic() {
@@ -585,8 +586,14 @@ mod tests {
         streamer.start().await.unwrap();
 
         // Create streams
-        streamer.create_stream("test1".to_string(), None).await.unwrap();
-        streamer.create_stream("test2".to_string(), None).await.unwrap();
+        streamer
+            .create_stream("test1".to_string(), None)
+            .await
+            .unwrap();
+        streamer
+            .create_stream("test2".to_string(), None)
+            .await
+            .unwrap();
 
         // Check stats
         let stats = streamer.stats().await;

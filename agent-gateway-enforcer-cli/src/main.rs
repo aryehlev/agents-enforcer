@@ -12,8 +12,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use agent_gateway_enforcer_common::config::{
-    BackendType, ConfigTemplate, DefaultPolicy, FileAccessConfig, GatewayConfig,
-    UnifiedConfig,
+    BackendType, ConfigTemplate, DefaultPolicy, FileAccessConfig, GatewayConfig, UnifiedConfig,
 };
 use agent_gateway_enforcer_core::{
     backend::{BackendLifecycleManager, BackendRegistry},
@@ -115,7 +114,10 @@ async fn main() -> Result<()> {
             // Initialize logging based on log level
             init_logging(&log_level)?;
 
-            info!("Starting Agent Gateway Enforcer v{}", env!("CARGO_PKG_VERSION"));
+            info!(
+                "Starting Agent Gateway Enforcer v{}",
+                env!("CARGO_PKG_VERSION")
+            );
 
             // Load or build configuration
             let unified_config = if let Some(config_path) = &config {
@@ -187,7 +189,9 @@ async fn load_config_from_file(config_path: &PathBuf) -> Result<UnifiedConfig> {
     info!("Loading configuration from {:?}", config_path);
 
     let mut config_manager = ConfigManager::new(config_path);
-    let config = config_manager.load().await
+    let config = config_manager
+        .load()
+        .await
         .context("Failed to load configuration file")?;
 
     info!("Configuration loaded successfully");
@@ -229,16 +233,17 @@ fn build_config_from_args(
     };
 
     // Configure gateways
-    config.gateways = gateways.into_iter().map(|addr| {
-        GatewayConfig {
+    config.gateways = gateways
+        .into_iter()
+        .map(|addr| GatewayConfig {
             address: addr.to_string(),
             description: Some(format!("Gateway at {}", addr)),
             protocols: vec![],
             enabled: true,
             priority: 0,
             tags: vec![],
-        }
-    }).collect();
+        })
+        .collect();
 
     // Configure file access
     config.file_access = FileAccessConfig {
@@ -260,10 +265,7 @@ fn build_config_from_args(
     config.metrics.port = port;
 
     // Configure web dashboard
-    let (web_host, web_port) = (
-        web_addr.ip().to_string(),
-        web_addr.port(),
-    );
+    let (web_host, web_port) = (web_addr.ip().to_string(), web_addr.port());
     config.ui.web_dashboard.enabled = true;
     config.ui.web_dashboard.host = web_host;
     config.ui.web_dashboard.port = web_port;
@@ -273,7 +275,10 @@ fn build_config_from_args(
     debug!("Gateways: {} configured", config.gateways.len());
     debug!("File enforcement: {}", config.file_access.enabled);
     debug!("Metrics port: {}", config.metrics.port);
-    debug!("Web dashboard: {}:{}", config.ui.web_dashboard.host, config.ui.web_dashboard.port);
+    debug!(
+        "Web dashboard: {}:{}",
+        config.ui.web_dashboard.host, config.ui.web_dashboard.port
+    );
 
     Ok(config)
 }
@@ -298,7 +303,10 @@ async fn run_enforcer(
     } else {
         info!("Available backends:");
         for backend_info in &available_backends {
-            info!("  - {:?} (platform: {:?})", backend_info.backend_type, backend_info.platform);
+            info!(
+                "  - {:?} (platform: {:?})",
+                backend_info.backend_type, backend_info.platform
+            );
         }
     }
 
@@ -307,10 +315,8 @@ async fn run_enforcer(
     info!("Lifecycle manager initialized");
 
     // Initialize metrics system
-    let metrics_registry = Arc::new(
-        MetricsRegistry::new_default()
-            .context("Failed to initialize metrics registry")?
-    );
+    let metrics_registry =
+        Arc::new(MetricsRegistry::new_default().context("Failed to initialize metrics registry")?);
     info!("Metrics system initialized");
 
     // Initialize event bus
@@ -318,7 +324,8 @@ async fn run_enforcer(
     info!("Event bus initialized");
 
     // Initialize config manager
-    let config_path = config_path.unwrap_or_else(|| PathBuf::from("/tmp/agent-gateway-enforcer.yaml"));
+    let config_path =
+        config_path.unwrap_or_else(|| PathBuf::from("/tmp/agent-gateway-enforcer.yaml"));
     let config_manager = Arc::new(RwLock::new(ConfigManager::new(&config_path)));
     {
         let cm = config_manager.write().await;
@@ -337,7 +344,11 @@ async fn run_enforcer(
 
     // Start the backend
     info!("Starting backend: {:?}", config.backend.backend_type);
-    match app_state.lifecycle_manager.auto_start(&convert_to_backend_config(&config)).await {
+    match app_state
+        .lifecycle_manager
+        .auto_start(&convert_to_backend_config(&config))
+        .await
+    {
         Ok(_) => {
             info!("Backend started successfully");
         }
@@ -363,7 +374,10 @@ async fn run_enforcer(
         event_bus.clone(),
     );
 
-    info!("Starting web server on {}:{}", web_config.host, web_config.port);
+    info!(
+        "Starting web server on {}:{}",
+        web_config.host, web_config.port
+    );
 
     let web_handle = tokio::spawn(async move {
         if let Err(e) = web_server.start().await {
@@ -381,8 +395,14 @@ async fn run_enforcer(
     });
 
     info!("Agent Gateway Enforcer is running");
-    info!("  Web dashboard: http://{}:{}", web_config.host, web_config.port);
-    info!("  Metrics endpoint: http://127.0.0.1:{}/metrics", metrics_port);
+    info!(
+        "  Web dashboard: http://{}:{}",
+        web_config.host, web_config.port
+    );
+    info!(
+        "  Metrics endpoint: http://127.0.0.1:{}/metrics",
+        metrics_port
+    );
     info!("Press Ctrl+C to shutdown");
 
     // Wait for shutdown signal
@@ -413,74 +433,78 @@ async fn run_enforcer(
 }
 
 /// Run the metrics server
-async fn run_metrics_server(
-    port: u16,
-    metrics_registry: Arc<MetricsRegistry>,
-) -> Result<()> {
-    use axum::{
-        routing::get,
-        Router,
-        response::IntoResponse,
-        http::StatusCode,
-    };
+async fn run_metrics_server(port: u16, metrics_registry: Arc<MetricsRegistry>) -> Result<()> {
+    use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 
     let app = Router::new()
-        .route("/metrics", get({
-            let metrics_registry = metrics_registry.clone();
-            move || {
+        .route(
+            "/metrics",
+            get({
                 let metrics_registry = metrics_registry.clone();
-                async move {
-                    match metrics_registry.global_metrics().export_prometheus() {
-                        Ok(metrics) => (StatusCode::OK, metrics).into_response(),
-                        Err(e) => {
-                            error!("Failed to export metrics: {}", e);
-                            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to export metrics").into_response()
+                move || {
+                    let metrics_registry = metrics_registry.clone();
+                    async move {
+                        match metrics_registry.global_metrics().export_prometheus() {
+                            Ok(metrics) => (StatusCode::OK, metrics).into_response(),
+                            Err(e) => {
+                                error!("Failed to export metrics: {}", e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Failed to export metrics",
+                                )
+                                    .into_response()
+                            }
                         }
                     }
                 }
-            }
-        }))
-        .route("/health", get(|| async {
-            (StatusCode::OK, "OK")
-        }));
+            }),
+        )
+        .route("/health", get(|| async { (StatusCode::OK, "OK") }));
 
     let addr = format!("127.0.0.1:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
         .context(format!("Failed to bind metrics server to {}", addr))?;
 
     info!("Metrics server listening on {}", addr);
 
-    axum::serve(listener, app).await
+    axum::serve(listener, app)
+        .await
         .context("Metrics server error")?;
 
     Ok(())
 }
 
 /// Convert UnifiedConfig to backend-specific config
-fn convert_to_backend_config(config: &UnifiedConfig) -> agent_gateway_enforcer_core::backend::UnifiedConfig {
+fn convert_to_backend_config(
+    config: &UnifiedConfig,
+) -> agent_gateway_enforcer_core::backend::UnifiedConfig {
     use agent_gateway_enforcer_core::backend::{
+        FileAccessConfig as BackendFileAccessConfig, GatewayConfig as BackendGatewayConfig,
         UnifiedConfig as BackendConfig,
-        GatewayConfig as BackendGatewayConfig,
-        FileAccessConfig as BackendFileAccessConfig,
     };
 
     BackendConfig {
-        gateways: config.gateways.iter().map(|g| {
-            // Parse address to get IP and port
-            let parts: Vec<&str> = g.address.split(':').collect();
-            let (address, port) = if parts.len() == 2 {
-                (parts[0].to_string(), parts[1].parse::<u16>().unwrap_or(443))
-            } else {
-                (g.address.clone(), 443)
-            };
+        gateways: config
+            .gateways
+            .iter()
+            .map(|g| {
+                // Parse address to get IP and port
+                let parts: Vec<&str> = g.address.split(':').collect();
+                let (address, port) = if parts.len() == 2 {
+                    (parts[0].to_string(), parts[1].parse::<u16>().unwrap_or(443))
+                } else {
+                    (g.address.clone(), 443)
+                };
 
-            BackendGatewayConfig {
-                address,
-                port,
-                enabled: g.enabled,
-                description: g.description.clone(),
-            }
-        }).collect(),
+                BackendGatewayConfig {
+                    address,
+                    port,
+                    enabled: g.enabled,
+                    description: g.description.clone(),
+                }
+            })
+            .collect(),
         file_access: BackendFileAccessConfig {
             allowed_paths: config.file_access.allowed_extensions.clone(),
             denied_paths: config.file_access.monitored_processes.clone(),

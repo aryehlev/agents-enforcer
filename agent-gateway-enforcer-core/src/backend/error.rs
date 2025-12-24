@@ -10,100 +10,100 @@ pub enum BackendError {
     #[error("Backend not found: {backend_type:?}")]
     BackendNotFound {
         /// The backend type that was not found
-        backend_type: BackendType
+        backend_type: BackendType,
     },
-    
+
     /// Backend initialization failed
     #[error("Backend initialization failed: {reason}")]
     InitializationFailed {
         /// Reason for the initialization failure
-        reason: String
+        reason: String,
     },
-    
+
     /// Backend start operation failed
     #[error("Backend start failed: {reason}")]
     StartFailed {
         /// Reason for the start failure
-        reason: String
+        reason: String,
     },
-    
+
     /// Backend stop operation failed
     #[error("Backend stop failed: {reason}")]
     StopFailed {
         /// Reason for the stop failure
-        reason: String
+        reason: String,
     },
-    
+
     /// Configuration error
     #[error("Configuration error: {reason}")]
     ConfigurationError {
         /// Reason for the configuration error
-        reason: String
+        reason: String,
     },
-    
+
     /// Platform not supported
     #[error("Platform not supported: {platform}")]
     UnsupportedPlatform {
         /// The unsupported platform name
-        platform: String
+        platform: String,
     },
-    
+
     /// Backend not available on current platform
     #[error("Backend not available on current platform: {backend_type:?}")]
     NotAvailableOnPlatform {
         /// The backend type that's not available
-        backend_type: BackendType
+        backend_type: BackendType,
     },
-    
+
     /// Backend factory not found
     #[error("Backend factory not found: {backend_type:?}")]
     FactoryNotFound {
         /// The backend type whose factory wasn't found
-        backend_type: BackendType
+        backend_type: BackendType,
     },
-    
+
     /// Backend operation failed
     #[error("Backend operation failed: {operation} - {reason}")]
     OperationFailed {
         /// The operation that failed
         operation: String,
         /// Reason for the failure
-        reason: String
+        reason: String,
     },
-    
+
     /// Health check failed
     #[error("Health check failed: {reason}")]
     HealthCheckFailed {
         /// Reason for the health check failure
-        reason: String
+        reason: String,
     },
-    
+
     /// Resource cleanup failed
     #[error("Resource cleanup failed: {reason}")]
     CleanupFailed {
         /// Reason for the cleanup failure
-        reason: String
+        reason: String,
     },
-    
+
     /// No backend registered
     #[error("No backend registered for current platform")]
     NoBackendRegistered,
-    
+
     /// Backend already running
     #[error("Backend is already running")]
     AlreadyRunning,
-    
+
     /// Backend not running
     #[error("Backend is not running")]
     NotRunning,
-    
+
     /// Invalid configuration
     #[error("Invalid configuration: {field} - {reason}")]
     InvalidConfiguration {
         /// The configuration field that's invalid
         field: String,
         /// Reason why it's invalid
-        reason: String
+        reason: String,
     },
 }
 
@@ -114,28 +114,28 @@ impl BackendError {
             reason: reason.into(),
         }
     }
-    
+
     /// Create a start failed error
     pub fn start_failed(reason: impl Into<String>) -> Self {
         Self::StartFailed {
             reason: reason.into(),
         }
     }
-    
+
     /// Create a stop failed error
     pub fn stop_failed(reason: impl Into<String>) -> Self {
         Self::StopFailed {
             reason: reason.into(),
         }
     }
-    
+
     /// Create a configuration error
     pub fn configuration_error(reason: impl Into<String>) -> Self {
         Self::ConfigurationError {
             reason: reason.into(),
         }
     }
-    
+
     /// Create an operation failed error
     pub fn operation_failed(operation: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::OperationFailed {
@@ -143,21 +143,21 @@ impl BackendError {
             reason: reason.into(),
         }
     }
-    
+
     /// Create a health check failed error
     pub fn health_check_failed(reason: impl Into<String>) -> Self {
         Self::HealthCheckFailed {
             reason: reason.into(),
         }
     }
-    
+
     /// Create a cleanup failed error
     pub fn cleanup_failed(reason: impl Into<String>) -> Self {
         Self::CleanupFailed {
             reason: reason.into(),
         }
     }
-    
+
     /// Create an invalid configuration error
     pub fn invalid_configuration(field: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::InvalidConfiguration {

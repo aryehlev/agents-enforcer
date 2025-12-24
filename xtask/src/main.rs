@@ -69,24 +69,20 @@ fn build_ebpf(opts: BuildEbpfOptions) -> Result<()> {
     let target = "bpfel-unknown-none";
 
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(&dir)
-        .env_remove("RUSTUP_TOOLCHAIN")
-        .args([
-            "+nightly",
-            "build",
-            "--target",
-            target,
-            "-Z",
-            "build-std=core",
-        ]);
+    cmd.current_dir(&dir).env_remove("RUSTUP_TOOLCHAIN").args([
+        "+nightly",
+        "build",
+        "--target",
+        target,
+        "-Z",
+        "build-std=core",
+    ]);
 
     if opts.release {
         cmd.arg("--release");
     }
 
-    let status = cmd
-        .status()
-        .context("Failed to run cargo build for eBPF")?;
+    let status = cmd.status().context("Failed to run cargo build for eBPF")?;
 
     if !status.success() {
         bail!("Failed to build eBPF program");

@@ -475,7 +475,7 @@ mod tests {
             let key = PathKey::new(path);
             assert!(key.len > 0);
             assert!(key.len <= MAX_PATH_LEN as u16);
-            
+
             // Verify the path was stored correctly
             let stored = core::str::from_utf8(&key.path[..key.len as usize]).unwrap();
             assert_eq!(stored, *path);
@@ -487,7 +487,7 @@ mod tests {
         // Test with UTF-8 characters (should be stored as bytes)
         let unicode_path = "/tmp/测试文件.txt";
         let key = PathKey::new(unicode_path);
-        
+
         assert!(key.len > 0);
         // The path should be stored as UTF-8 bytes
         let stored_bytes = &key.path[..key.len as usize];
@@ -501,10 +501,10 @@ mod tests {
 
         assert_eq!(allow_rule.rule_type, PathRuleType::Allow);
         assert_eq!(deny_rule.rule_type, PathRuleType::Deny);
-        
+
         assert!(allow_rule.permissions & FILE_PERM_READ != 0);
         assert!(deny_rule.permissions & FILE_PERM_READ != 0);
-        
+
         assert_eq!(allow_rule.is_prefix, 1);
         assert_eq!(deny_rule.is_prefix, 1);
     }
@@ -651,7 +651,7 @@ mod tests {
                 if rule.rule_type == PathRuleType::Allow {
                     false // Allow rule doesn't apply
                 } else {
-                    true  // Deny rule doesn't apply
+                    true // Deny rule doesn't apply
                 }
             };
 
@@ -676,17 +676,17 @@ mod tests {
 
         for path in &test_paths {
             let key = PathKey::new(path);
-            
+
             // Test that the path can be reconstructed
             let reconstructed = core::str::from_utf8(&key.path[..key.len as usize]).unwrap();
             assert_eq!(reconstructed, *path);
-            
+
             // Test prefix matching logic (simplified)
             let path_str = *path;
             if let Some(slash_pos) = path_str.rfind('/') {
                 let parent = &path_str[..slash_pos];
                 let parent_key = PathKey::new(parent);
-                
+
                 // Parent should be shorter
                 assert!(parent_key.len < key.len);
             }

@@ -1,21 +1,23 @@
 //! Unified event system for agent gateway enforcer
 
+pub mod aggregation;
 pub mod bus;
+pub mod export;
 pub mod handlers;
 pub mod streaming;
-pub mod aggregation;
-pub mod export;
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+pub use aggregation::{AggregatedEvent, AggregationRule, EventAggregator};
 pub use bus::{EventBus, EventBusHandle, EventBusStats};
-pub use handlers::{EventHandler, EventFilter, EventTypeFilter, EventSourceFilter, EventSeverityFilter};
-pub use streaming::{EventStreamer, StreamHandle, StreamedEvent};
-pub use aggregation::{EventAggregator, AggregationRule, AggregatedEvent};
 pub use export::{EventExporter, ExportFormat};
+pub use handlers::{
+    EventFilter, EventHandler, EventSeverityFilter, EventSourceFilter, EventTypeFilter,
+};
+pub use streaming::{EventStreamer, StreamHandle, StreamedEvent};
 
 /// Unified event structure for all platforms and backends
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +73,7 @@ impl UnifiedEvent {
             bytes_transferred: None,
             duration_ms: None,
         });
-        
+
         Self::new(EventType::Network, source, data)
     }
 
@@ -93,7 +95,7 @@ impl UnifiedEvent {
             file_size: None,
             file_hash: None,
         });
-        
+
         Self::new(EventType::FileAccess, source, data)
     }
 
@@ -112,7 +114,7 @@ impl UnifiedEvent {
             new_state: None,
             error_code: None,
         });
-        
+
         Self::new(EventType::System, source, data)
     }
 
@@ -131,7 +133,7 @@ impl UnifiedEvent {
             indicators: HashMap::new(),
             remediation: None,
         });
-        
+
         Self::new(EventType::Security, source, data)
     }
 
@@ -652,7 +654,10 @@ mod tests {
         .with_tag("environment".to_string(), "test".to_string())
         .with_custom_fields(HashMap::from([("version".to_string(), "1.0.0".into())]));
 
-        assert_eq!(event.metadata.tags.get("environment"), Some(&"test".to_string()));
+        assert_eq!(
+            event.metadata.tags.get("environment"),
+            Some(&"test".to_string())
+        );
         assert_eq!(
             event.metadata.custom_fields.get("version"),
             Some(&"1.0.0".into())
@@ -675,9 +680,15 @@ mod tests {
     #[test]
     fn test_event_severity_from_str() {
         assert_eq!(EventSeverity::from_str("info"), Some(EventSeverity::Info));
-        assert_eq!(EventSeverity::from_str("warning"), Some(EventSeverity::Warning));
+        assert_eq!(
+            EventSeverity::from_str("warning"),
+            Some(EventSeverity::Warning)
+        );
         assert_eq!(EventSeverity::from_str("error"), Some(EventSeverity::Error));
-        assert_eq!(EventSeverity::from_str("critical"), Some(EventSeverity::Critical));
+        assert_eq!(
+            EventSeverity::from_str("critical"),
+            Some(EventSeverity::Critical)
+        );
         assert_eq!(EventSeverity::from_str("invalid"), None);
     }
 }

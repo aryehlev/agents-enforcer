@@ -1,5 +1,5 @@
 //! Test utilities and helper functions for the integration test suite
-//! 
+//!
 //! This module provides common utilities used across all test modules including:
 //! - Temporary file and directory management
 //! - Network port allocation and management
@@ -38,7 +38,7 @@ impl TempDirManager {
             temp_dirs: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    
+
     /// Create a new temporary directory
     pub fn create_temp_dir(&self) -> Result<TempDir, anyhow::Error> {
         let temp_dir = tempdir()?;
@@ -46,7 +46,7 @@ impl TempDirManager {
         // Return a reference to the just-added directory
         Ok(self.temp_dirs.lock().unwrap().last().unwrap().clone())
     }
-    
+
     /// Create a temporary file with given content
     pub fn create_temp_file(&self, name: &str, content: &str) -> Result<PathBuf, anyhow::Error> {
         let temp_dir = self.create_temp_dir()?;
@@ -54,7 +54,7 @@ impl TempDirManager {
         fs::write(&file_path, content)?;
         Ok(file_path)
     }
-    
+
     /// Get the number of managed temporary directories
     pub fn count(&self) -> usize {
         self.temp_dirs.lock().unwrap().len()
@@ -86,26 +86,29 @@ impl PortManager {
             allocated_ports: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    
+
     /// Allocate a port for a specific test component
     pub fn allocate_port(&self, component: &str) -> Result<u16, anyhow::Error> {
         let mut ports = self.allocated_ports.lock().unwrap();
-        
+
         if ports.contains_key(component) {
             return Ok(ports[component]);
         }
-        
+
         let port = self.base_port + ports.len() as u16;
         ports.insert(component.to_string(), port);
         Ok(port)
     }
-    
+
     /// Get the base socket address for allocated port
     pub fn get_socket_addr(&self, component: &str) -> Result<SocketAddr, anyhow::Error> {
         let port = self.allocate_port(component)?;
-        Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
+        Ok(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            port,
+        ))
     }
-    
+
     /// Check if a port is available
     pub fn is_port_available(&self, port: u16) -> bool {
         use std::net::TcpListener;
@@ -140,71 +143,77 @@ impl MockBackend {
             config: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    
+
     /// Initialize the mock backend
     pub fn initialize(&self) -> Result<(), anyhow::Error> {
         self.log_operation("initialize".to_string());
         *self.initialized.lock().unwrap() = true;
         Ok(())
     }
-    
+
     /// Shutdown the mock backend
     pub fn shutdown(&self) -> Result<(), anyhow::Error> {
         self.log_operation("shutdown".to_string());
         *self.initialized.lock().unwrap() = false;
         Ok(())
     }
-    
+
     /// Check if backend is initialized
     pub fn is_initialized(&self) -> bool {
         *self.initialized.lock().unwrap()
     }
-    
+
     /// Get the backend name
     pub fn name(&self) -> &str {
         &self.name
     }
-    
+
     /// Get the backend type
     pub fn backend_type(&self) -> &str {
         &self.backend_type
     }
-    
+
     /// Get the platform
     pub fn platform(&self) -> &str {
         &self.platform
     }
-    
+
     /// Set a configuration value
     pub fn set_config(&self, key: &str, value: &str) {
-        self.config.lock().unwrap().insert(key.to_string(), value.to_string());
+        self.config
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), value.to_string());
     }
-    
+
     /// Get a configuration value
     pub fn get_config(&self, key: &str) -> Option<String> {
         self.config.lock().unwrap().get(key).cloned()
     }
-    
+
     /// Log an operation
     pub fn log_operation(&self, operation: String) {
         self.operations.lock().unwrap().push(operation);
     }
-    
+
     /// Get all logged operations
     pub fn get_operations(&self) -> Vec<String> {
         self.operations.lock().unwrap().clone()
     }
-    
+
     /// Clear operation log
     pub fn clear_operations(&self) {
         self.operations.lock().unwrap().clear();
     }
-    
+
     /// Check if specific operation was performed
     pub fn has_operation(&self, operation: &str) -> bool {
-        self.operations.lock().unwrap().contains(&operation.to_string())
+        self.operations
+            .lock()
+            .unwrap()
+            .contains(&operation.to_string())
     }
-    
+
     /// Count operations of a specific type
     pub fn count_operations(&self, operation: &str) -> usize {
         self.operations
@@ -232,7 +241,7 @@ impl ConfigGenerator {
             temp_dir_manager: TempDirManager::new(),
         }
     }
-    
+
     /// Generate a minimal YAML configuration
     pub fn generate_minimal_yaml(&self) -> Result<PathBuf, anyhow::Error> {
         let config = r#"
@@ -247,9 +256,10 @@ backend:
 logging:
   level: "info"
 "#;
-        self.temp_dir_manager.create_temp_file("config.yaml", config)
+        self.temp_dir_manager
+            .create_temp_file("config.yaml", config)
     }
-    
+
     /// Generate a development YAML configuration
     pub fn generate_dev_yaml(&self) -> Result<PathBuf, anyhow::Error> {
         let config = r#"
@@ -282,9 +292,10 @@ security:
   default_policy: "deny"
   log_blocked_access: true
 "#;
-        self.temp_dir_manager.create_temp_file("config-dev.yaml", config)
+        self.temp_dir_manager
+            .create_temp_file("config-dev.yaml", config)
     }
-    
+
     /// Generate a production YAML configuration
     pub fn generate_prod_yaml(&self) -> Result<PathBuf, anyhow::Error> {
         let config = r#"
@@ -330,9 +341,10 @@ cors:
   allowed_methods: ["GET", "POST", "PUT", "DELETE"]
   allowed_headers: ["Content-Type", "Authorization"]
 "#;
-        self.temp_dir_manager.create_temp_file("config-prod.yaml", config)
+        self.temp_dir_manager
+            .create_temp_file("config-prod.yaml", config)
     }
-    
+
     /// Generate JSON configuration
     pub fn generate_json(&self) -> Result<PathBuf, anyhow::Error> {
         let config = r#"
@@ -349,9 +361,10 @@ cors:
   }
 }
 "#;
-        self.temp_dir_manager.create_temp_file("config.json", config)
+        self.temp_dir_manager
+            .create_temp_file("config.json", config)
     }
-    
+
     /// Generate TOML configuration
     pub fn generate_toml(&self) -> Result<PathBuf, anyhow::Error> {
         let config = r#"
@@ -365,9 +378,10 @@ type = "mock"
 [logging]
 level = "info"
 "#;
-        self.temp_dir_manager.create_temp_file("config.toml", config)
+        self.temp_dir_manager
+            .create_temp_file("config.toml", config)
     }
-    
+
     /// Generate invalid configuration for testing error handling
     pub fn generate_invalid_config(&self) -> Result<PathBuf, anyhow::Error> {
         let config = r#"
@@ -380,7 +394,8 @@ backend:
   
 missing_required_field: true
 "#;
-        self.temp_dir_manager.create_temp_file("config-invalid.yaml", config)
+        self.temp_dir_manager
+            .create_temp_file("config-invalid.yaml", config)
     }
 }
 
@@ -399,10 +414,7 @@ pub struct AsyncTestHelper;
 
 impl AsyncTestHelper {
     /// Run an async function with a timeout
-    pub async fn with_timeout<F, T>(
-        duration: Duration,
-        future: F,
-    ) -> Result<T, anyhow::Error>
+    pub async fn with_timeout<F, T>(duration: Duration, future: F) -> Result<T, anyhow::Error>
     where
         F: std::future::Future<Output = T>,
     {
@@ -411,7 +423,7 @@ impl AsyncTestHelper {
             Err(_) => Err(anyhow::anyhow!("Test timed out after {:?}", duration)),
         }
     }
-    
+
     /// Wait for a condition to become true with timeout
     pub async fn wait_for_condition<F>(
         duration: Duration,
@@ -423,16 +435,16 @@ impl AsyncTestHelper {
     {
         let condition = Arc::new(condition);
         let start = std::time::Instant::now();
-        
+
         loop {
             if (condition)() {
                 return Ok(());
             }
-            
+
             if start.elapsed() > duration {
                 return Err(anyhow::anyhow!("Condition not met within timeout"));
             }
-            
+
             tokio::time::sleep(interval).await;
         }
     }
@@ -456,10 +468,10 @@ impl ProcessUtils {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        
+
         Ok(child)
     }
-    
+
     /// Check if a process is running by PID
     pub fn is_process_running(pid: u32) -> bool {
         #[cfg(unix)]
@@ -477,14 +489,14 @@ impl ProcessUtils {
             true // Placeholder
         }
     }
-    
+
     /// Wait for a process to exit with timeout
     pub fn wait_for_exit(
         child: &mut std::process::Child,
         timeout: Duration,
     ) -> Result<std::process::ExitStatus, anyhow::Error> {
         let start = std::time::Instant::now();
-        
+
         loop {
             match child.try_wait()? {
                 Some(status) => return Ok(status),
@@ -508,7 +520,10 @@ pub struct FsUtils;
 
 impl FsUtils {
     /// Create a directory structure for testing
-    pub fn create_directory_structure(base: &Path, structure: &[&str]) -> Result<(), anyhow::Error> {
+    pub fn create_directory_structure(
+        base: &Path,
+        structure: &[&str],
+    ) -> Result<(), anyhow::Error> {
         for path in structure {
             let full_path = base.join(path);
             if path.ends_with('/') {
@@ -522,17 +537,17 @@ impl FsUtils {
         }
         Ok(())
     }
-    
+
     /// Check if a file exists and has the expected content
     pub fn verify_file_content(path: &Path, expected_content: &str) -> Result<bool, anyhow::Error> {
         if !path.exists() {
             return Ok(false);
         }
-        
+
         let content = fs::read_to_string(path)?;
         Ok(content == expected_content)
     }
-    
+
     /// Get file permissions
     #[cfg(unix)]
     pub fn get_file_permissions(path: &Path) -> Result<u32, anyhow::Error> {
@@ -540,7 +555,7 @@ impl FsUtils {
         let metadata = fs::metadata(path)?;
         Ok(metadata.permissions().mode())
     }
-    
+
     /// Set file permissions
     #[cfg(unix)]
     pub fn set_file_permissions(path: &Path, mode: u32) -> Result<(), anyhow::Error> {
@@ -566,7 +581,7 @@ impl NetUtils {
         use std::net::TcpListener;
         TcpListener::bind(("127.0.0.1", port)).is_err()
     }
-    
+
     /// Find an available port starting from base_port
     pub fn find_available_port(base_port: u16) -> Option<u16> {
         for port in base_port..(base_port + 100) {
@@ -576,20 +591,24 @@ impl NetUtils {
         }
         None
     }
-    
+
     /// Wait for a service to be available on a port
     pub async fn wait_for_service(port: u16, timeout: Duration) -> Result<(), anyhow::Error> {
         let start = std::time::Instant::now();
-        
+
         loop {
             if Self::is_port_in_use(port) {
                 return Ok(());
             }
-            
+
             if start.elapsed() > timeout {
-                return Err(anyhow::anyhow!("Service not available on port {} within {:?}", port, timeout));
+                return Err(anyhow::anyhow!(
+                    "Service not available on port {} within {:?}",
+                    port,
+                    timeout
+                ));
             }
-            
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }

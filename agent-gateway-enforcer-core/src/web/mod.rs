@@ -1,19 +1,19 @@
-use std::sync::Arc;
-use std::net::SocketAddr;
-use tokio::sync::RwLock;
-use warp::{Filter, Rejection, Reply};
-use warp::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{error, info, warn};
+use warp::http::StatusCode;
+use warp::{Filter, Rejection, Reply};
 
 pub mod api;
-pub mod websocket;
 pub mod static_files;
+pub mod websocket;
 
 use crate::config::manager::ConfigManager;
 use crate::config::UnifiedConfig;
-use crate::metrics::registry::MetricsRegistry;
 use crate::events::bus::EventBus;
+use crate::metrics::registry::MetricsRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
@@ -91,10 +91,12 @@ impl WebServer {
         // Apply CORS if enabled and start server
         info!("Web server listening on http://{}", addr);
         if self.config.enable_cors {
-            let routes_with_cors = routes.with(warp::cors()
-                .allow_any_origin()
-                .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-                .allow_headers(vec!["Content-Type", "Authorization"]));
+            let routes_with_cors = routes.with(
+                warp::cors()
+                    .allow_any_origin()
+                    .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+                    .allow_headers(vec!["Content-Type", "Authorization"]),
+            );
             warp::serve(routes_with_cors).run(addr).await;
         } else {
             warp::serve(routes).run(addr).await;
@@ -111,7 +113,11 @@ impl WebServer {
     ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
         let status_route = warp::path!("api" / "v1" / "status")
             .and(warp::get())
-            .and(with_state(config_manager.clone(), metrics_registry.clone(), event_bus.clone()))
+            .and(with_state(
+                config_manager.clone(),
+                metrics_registry.clone(),
+                event_bus.clone(),
+            ))
             .and_then(handlers::get_status);
 
         let metrics_route = warp::path!("api" / "v1" / "metrics")
@@ -164,14 +170,23 @@ fn with_state(
     config: Arc<RwLock<ConfigManager>>,
     metrics: Arc<MetricsRegistry>,
     events: Arc<EventBus>,
-) -> impl Filter<Extract = (Arc<RwLock<ConfigManager>>, Arc<MetricsRegistry>, Arc<EventBus>), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || (config.clone(), metrics.clone(), events.clone()))
+) -> impl Filter<
+    Extract = (
+        Arc<RwLock<ConfigManager>>,
+        Arc<MetricsRegistry>,
+        Arc<EventBus>,
+    ),
+    Error = std::convert::Infallible,
+> + Clone {
+    warp::any()
+        .map(move || (config.clone(), metrics.clone(), events.clone()))
         .untuple_one()
 }
 
 fn with_config(
     config: Arc<RwLock<ConfigManager>>,
-) -> impl Filter<Extract = (Arc<RwLock<ConfigManager>>,), Error = std::convert::Infallible> + Clone {
+) -> impl Filter<Extract = (Arc<RwLock<ConfigManager>>,), Error = std::convert::Infallible> + Clone
+{
     warp::any().map(move || config.clone())
 }
 
@@ -278,18 +293,13 @@ mod handlers {
     ) -> Result<impl Reply, Rejection> {
         // TODO: Implement event retrieval from event bus
         let events = vec![];
-        
-        let response = EventsResponse {
-            events,
-            total: 0,
-        };
+
+        let response = EventsResponse { events, total: 0 };
 
         Ok(warp::reply::json(&response))
     }
 
-    pub async fn get_config(
-        config: Arc<RwLock<ConfigManager>>,
-    ) -> Result<impl Reply, Rejection> {
+    pub async fn get_config(config: Arc<RwLock<ConfigManager>>) -> Result<impl Reply, Rejection> {
         let config_manager = config.read().await;
         let current_config = config_manager.get_current().await;
 
@@ -305,14 +315,20 @@ mod handlers {
         config: Arc<RwLock<ConfigManager>>,
     ) -> Result<impl Reply, Rejection> {
         // Convert JSON value to UnifiedConfig
-        let config_update: UnifiedConfig =
-            serde_json::from_value(new_config)
-                .map_err(|_| warp::reject::custom(ApiError::BadRequest("Invalid config".to_string())))?;
+        let config_update: UnifiedConfig = serde_json::from_value(new_config).map_err(|_| {
+            warp::reject::custom(ApiError::BadRequest("Invalid config".to_string()))
+        })?;
 
         {
             let config_manager = config.read().await;
-            config_manager.update_current(config_update).await
-                .map_err(|_| warp::reject::custom(ApiError::InternalError("Failed to update config".to_string())))?;
+            config_manager
+                .update_current(config_update)
+                .await
+                .map_err(|_| {
+                    warp::reject::custom(ApiError::InternalError(
+                        "Failed to update config".to_string(),
+                    ))
+                })?;
         }
 
         let config_manager = config.read().await;

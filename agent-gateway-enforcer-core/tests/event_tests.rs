@@ -275,7 +275,11 @@ async fn test_event_filtering_by_severity() {
     });
 
     handle
-        .register_handler(handler.clone(), Some(filter), "severity_filtered".to_string())
+        .register_handler(
+            handler.clone(),
+            Some(filter),
+            "severity_filtered".to_string(),
+        )
         .await;
 
     // Publish info event (should be filtered out)
@@ -461,19 +465,13 @@ async fn test_event_severity_ordering() {
 
 #[tokio::test]
 async fn test_event_severity_from_str() {
-    assert_eq!(
-        EventSeverity::from_str("debug"),
-        Some(EventSeverity::Debug)
-    );
+    assert_eq!(EventSeverity::from_str("debug"), Some(EventSeverity::Debug));
     assert_eq!(EventSeverity::from_str("info"), Some(EventSeverity::Info));
     assert_eq!(
         EventSeverity::from_str("warning"),
         Some(EventSeverity::Warning)
     );
-    assert_eq!(
-        EventSeverity::from_str("error"),
-        Some(EventSeverity::Error)
-    );
+    assert_eq!(EventSeverity::from_str("error"), Some(EventSeverity::Error));
     assert_eq!(
         EventSeverity::from_str("critical"),
         Some(EventSeverity::Critical)

@@ -1,12 +1,12 @@
 //! Event export capabilities for multiple formats and destinations
 
-use crate::events::{UnifiedEvent};
 use crate::events::aggregation::AggregatedEvent;
+use crate::events::UnifiedEvent;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 /// Event exporter for multiple formats and destinations
 #[derive(Debug)]
@@ -145,7 +145,11 @@ pub enum HttpAuth {
     /// Basic authentication
     Basic { username: String, password: String },
     /// API key
-    ApiKey { key: String, value: String, header: Option<String> },
+    ApiKey {
+        key: String,
+        value: String,
+        header: Option<String>,
+    },
 }
 
 /// Retry policy
@@ -300,14 +304,24 @@ pub struct ExportStats {
 #[async_trait::async_trait]
 pub trait ExportDestination: std::fmt::Debug + Send + Sync {
     /// Export events to the destination
-    async fn export(&self, events: &[UnifiedEvent], format: ExportFormat, options: &ExportOptions) -> crate::Result<()>;
-    
+    async fn export(
+        &self,
+        events: &[UnifiedEvent],
+        format: ExportFormat,
+        options: &ExportOptions,
+    ) -> crate::Result<()>;
+
     /// Export aggregated events to the destination
-    async fn export_aggregated(&self, events: &[AggregatedEvent], format: ExportFormat, options: &ExportOptions) -> crate::Result<()>;
-    
+    async fn export_aggregated(
+        &self,
+        events: &[AggregatedEvent],
+        format: ExportFormat,
+        options: &ExportOptions,
+    ) -> crate::Result<()>;
+
     /// Check if destination is healthy
     async fn health_check(&self) -> crate::Result<bool>;
-    
+
     /// Get destination name
     fn name(&self) -> &str;
 }
@@ -342,7 +356,9 @@ impl EventExporter {
                 Box::new(MessageQueueExportDestination::new(mq_config.clone()))
             }
             DestinationType::Custom(_) => {
-                return Err(anyhow::anyhow!("Custom destinations not yet implemented".to_string()));
+                return Err(anyhow::anyhow!(
+                    "Custom destinations not yet implemented".to_string()
+                ));
             }
         };
 
@@ -381,7 +397,10 @@ impl EventExporter {
     }
 
     /// Export events
-    pub async fn export_events(&self, events: Vec<UnifiedEvent>) -> crate::Result<HashMap<String, crate::Result<()>>> {
+    pub async fn export_events(
+        &self,
+        events: Vec<UnifiedEvent>,
+    ) -> crate::Result<HashMap<String, crate::Result<()>>> {
         let mut results = HashMap::new();
         let configs = self.export_configs.read().await;
         let destinations = self.destinations.read().await;
@@ -393,7 +412,8 @@ impl EventExporter {
 
             // Filter events
             let filtered_events = if let Some(filter) = &config.event_filter {
-                events.iter()
+                events
+                    .iter()
                     .filter(|event| self.matches_filter(event, filter))
                     .cloned()
                     .collect()
@@ -407,7 +427,9 @@ impl EventExporter {
 
             // Export to destination
             if let Some(destination) = destinations.get(export_id) {
-                let result = destination.export(&filtered_events, config.format.clone(), &config.options).await;
+                let result = destination
+                    .export(&filtered_events, config.format.clone(), &config.options)
+                    .await;
                 let result_copy = result.is_ok();
                 results.insert(export_id.clone(), result);
 
@@ -432,7 +454,10 @@ impl EventExporter {
     }
 
     /// Export aggregated events
-    pub async fn export_aggregated_events(&self, events: Vec<AggregatedEvent>) -> crate::Result<HashMap<String, crate::Result<()>>> {
+    pub async fn export_aggregated_events(
+        &self,
+        events: Vec<AggregatedEvent>,
+    ) -> crate::Result<HashMap<String, crate::Result<()>>> {
         let mut results = HashMap::new();
         let configs = self.export_configs.read().await;
         let destinations = self.destinations.read().await;
@@ -444,7 +469,9 @@ impl EventExporter {
 
             // Export to destination
             if let Some(destination) = destinations.get(export_id) {
-                let result = destination.export_aggregated(&events, config.format.clone(), &config.options).await;
+                let result = destination
+                    .export_aggregated(&events, config.format.clone(), &config.options)
+                    .await;
                 let result_copy = result.is_ok();
                 results.insert(export_id.clone(), result);
 
@@ -479,18 +506,12 @@ impl EventExporter {
             EventFilterSpec::EventType(types) => types.contains(&event.event_type),
             EventFilterSpec::EventSource(sources) => sources.contains(&event.source),
             EventFilterSpec::EventSeverity(severities) => severities.contains(&event.severity),
-            EventFilterSpec::Tag(key, value) => {
-                event.metadata.tags.get(key) == Some(value)
-            }
+            EventFilterSpec::Tag(key, value) => event.metadata.tags.get(key) == Some(value),
             EventFilterSpec::CustomField(key, expected_value) => {
                 event.metadata.custom_fields.get(key) == Some(expected_value)
             }
-            EventFilterSpec::And(filters) => {
-                filters.iter().all(|f| self.matches_filter(event, f))
-            }
-            EventFilterSpec::Or(filters) => {
-                filters.iter().any(|f| self.matches_filter(event, f))
-            }
+            EventFilterSpec::And(filters) => filters.iter().all(|f| self.matches_filter(event, f)),
+            EventFilterSpec::Or(filters) => filters.iter().any(|f| self.matches_filter(event, f)),
             EventFilterSpec::All => true,
         }
     }
@@ -510,7 +531,12 @@ impl FileExportDestination {
 
 #[async_trait::async_trait]
 impl ExportDestination for FileExportDestination {
-    async fn export(&self, events: &[UnifiedEvent], format: ExportFormat, options: &ExportOptions) -> crate::Result<()> {
+    async fn export(
+        &self,
+        events: &[UnifiedEvent],
+        format: ExportFormat,
+        options: &ExportOptions,
+    ) -> crate::Result<()> {
         // Convert events to the specified format
         let content = match format {
             ExportFormat::Json => self.events_to_json(events, options)?,
@@ -520,18 +546,26 @@ impl ExportDestination for FileExportDestination {
             ExportFormat::Syslog => self.events_to_syslog(events, options)?,
             ExportFormat::Elasticsearch => self.events_to_elasticsearch(events, options)?,
             ExportFormat::Custom(_) => {
-                return Err(anyhow::anyhow!("Custom export format not implemented".to_string()));
+                return Err(anyhow::anyhow!(
+                    "Custom export format not implemented".to_string()
+                ));
             }
         };
 
         // Write to file
-        tokio::fs::write(&self.config.path, content).await
+        tokio::fs::write(&self.config.path, content)
+            .await
             .map_err(|e| anyhow::anyhow!(format!("Failed to write to file: {}", e)))?;
 
         Ok(())
     }
 
-    async fn export_aggregated(&self, events: &[AggregatedEvent], format: ExportFormat, options: &ExportOptions) -> crate::Result<()> {
+    async fn export_aggregated(
+        &self,
+        events: &[AggregatedEvent],
+        format: ExportFormat,
+        options: &ExportOptions,
+    ) -> crate::Result<()> {
         // Convert aggregated events to the specified format
         let content = match format {
             ExportFormat::Json => self.aggregated_events_to_json(events, options)?,
@@ -539,14 +573,19 @@ impl ExportDestination for FileExportDestination {
             ExportFormat::Xml => self.aggregated_events_to_xml(events, options)?,
             ExportFormat::Text => self.aggregated_events_to_text(events, options)?,
             ExportFormat::Syslog => self.aggregated_events_to_syslog(events, options)?,
-            ExportFormat::Elasticsearch => self.aggregated_events_to_elasticsearch(events, options)?,
+            ExportFormat::Elasticsearch => {
+                self.aggregated_events_to_elasticsearch(events, options)?
+            }
             ExportFormat::Custom(_) => {
-                return Err(anyhow::anyhow!("Custom export format not implemented".to_string()));
+                return Err(anyhow::anyhow!(
+                    "Custom export format not implemented".to_string()
+                ));
             }
         };
 
         // Write to file
-        tokio::fs::write(&self.config.path, content).await
+        tokio::fs::write(&self.config.path, content)
+            .await
             .map_err(|e| anyhow::anyhow!(format!("Failed to write to file: {}", e)))?;
 
         Ok(())
@@ -570,7 +609,11 @@ impl ExportDestination for FileExportDestination {
 }
 
 impl FileExportDestination {
-    fn events_to_json(&self, events: &[UnifiedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn events_to_json(
+        &self,
+        events: &[UnifiedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         if options.pretty_print {
             serde_json::to_string_pretty(events)
         } else {
@@ -579,12 +622,16 @@ impl FileExportDestination {
         .map_err(|e| anyhow::anyhow!(format!("Failed to serialize to JSON: {}", e)))
     }
 
-    fn events_to_csv(&self, events: &[UnifiedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn events_to_csv(
+        &self,
+        events: &[UnifiedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut csv = String::new();
-        
+
         // Header
         csv.push_str("id,timestamp,event_type,source,severity,data\n");
-        
+
         // Rows
         for event in events {
             csv.push_str(&format!(
@@ -597,31 +644,45 @@ impl FileExportDestination {
                 serde_json::to_string(&event.data).unwrap_or_default()
             ));
         }
-        
+
         Ok(csv)
     }
 
-    fn events_to_xml(&self, events: &[UnifiedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn events_to_xml(
+        &self,
+        events: &[UnifiedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<events>\n");
-        
+
         for event in events {
             xml.push_str("  <event>\n");
             xml.push_str(&format!("    <id>{}</id>\n", event.id));
             xml.push_str(&format!("    <timestamp>{}</timestamp>\n", event.timestamp));
-            xml.push_str(&format!("    <event_type>{:?}</event_type>\n", event.event_type));
+            xml.push_str(&format!(
+                "    <event_type>{:?}</event_type>\n",
+                event.event_type
+            ));
             xml.push_str(&format!("    <source>{:?}</source>\n", event.source));
             xml.push_str(&format!("    <severity>{:?}</severity>\n", event.severity));
-            xml.push_str(&format!("    <data>{}</data>\n", serde_json::to_string(&event.data).unwrap_or_default()));
+            xml.push_str(&format!(
+                "    <data>{}</data>\n",
+                serde_json::to_string(&event.data).unwrap_or_default()
+            ));
             xml.push_str("  </event>\n");
         }
-        
+
         xml.push_str("</events>");
         Ok(xml)
     }
 
-    fn events_to_text(&self, events: &[UnifiedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn events_to_text(
+        &self,
+        events: &[UnifiedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut text = String::new();
-        
+
         for event in events {
             text.push_str(&format!(
                 "{} [{}] {:?} {:?} - {}\n",
@@ -632,13 +693,17 @@ impl FileExportDestination {
                 event
             ));
         }
-        
+
         Ok(text)
     }
 
-    fn events_to_syslog(&self, events: &[UnifiedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn events_to_syslog(
+        &self,
+        events: &[UnifiedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut syslog = String::new();
-        
+
         for event in events {
             let priority = match event.severity {
                 crate::events::EventSeverity::Debug => 7,
@@ -647,7 +712,7 @@ impl FileExportDestination {
                 crate::events::EventSeverity::Error => 3,
                 crate::events::EventSeverity::Critical => 2,
             };
-            
+
             syslog.push_str(&format!(
                 "<{}> {} {} agent-gateway-enforcer: {}\n",
                 priority,
@@ -656,20 +721,24 @@ impl FileExportDestination {
                 event
             ));
         }
-        
+
         Ok(syslog)
     }
 
-    fn events_to_elasticsearch(&self, events: &[UnifiedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn events_to_elasticsearch(
+        &self,
+        events: &[UnifiedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         // Elasticsearch bulk format
         let mut bulk = String::new();
-        
+
         for event in events {
             // Index action
             bulk.push_str(&format!(
                 "{{\"index\":{{\"_index\":\"agent-gateway-events\"}}}}\n"
             ));
-            
+
             // Document
             let doc = serde_json::json!({
                 "@timestamp": event.timestamp,
@@ -680,15 +749,19 @@ impl FileExportDestination {
                 "data": event.data,
                 "metadata": event.metadata
             });
-            
+
             bulk.push_str(&serde_json::to_string(&doc).unwrap());
             bulk.push('\n');
         }
-        
+
         Ok(bulk)
     }
 
-    fn aggregated_events_to_json(&self, events: &[AggregatedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn aggregated_events_to_json(
+        &self,
+        events: &[AggregatedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         if options.pretty_print {
             serde_json::to_string_pretty(events)
         } else {
@@ -697,12 +770,16 @@ impl FileExportDestination {
         .map_err(|e| anyhow::anyhow!(format!("Failed to serialize to JSON: {}", e)))
     }
 
-    fn aggregated_events_to_csv(&self, events: &[AggregatedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn aggregated_events_to_csv(
+        &self,
+        events: &[AggregatedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut csv = String::new();
-        
+
         // Header
         csv.push_str("id,aggregation_type,grouping_key,event_count,time_window_start,time_window_end,value\n");
-        
+
         // Rows
         for event in events {
             csv.push_str(&format!(
@@ -716,32 +793,59 @@ impl FileExportDestination {
                 serde_json::to_string(&event.value).unwrap_or_default()
             ));
         }
-        
+
         Ok(csv)
     }
 
-    fn aggregated_events_to_xml(&self, events: &[AggregatedEvent], options: &ExportOptions) -> crate::Result<String> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<aggregated_events>\n");
-        
+    fn aggregated_events_to_xml(
+        &self,
+        events: &[AggregatedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
+        let mut xml =
+            String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<aggregated_events>\n");
+
         for event in events {
             xml.push_str("  <aggregated_event>\n");
             xml.push_str(&format!("    <id>{}</id>\n", event.id));
-            xml.push_str(&format!("    <aggregation_type>{:?}</aggregation_type>\n", event.aggregation_type));
-            xml.push_str(&format!("    <grouping_key>{}</grouping_key>\n", event.grouping_key));
-            xml.push_str(&format!("    <event_count>{}</event_count>\n", event.event_count));
-            xml.push_str(&format!("    <time_window_start>{}</time_window_start>\n", event.time_window.0));
-            xml.push_str(&format!("    <time_window_end>{}</time_window_end>\n", event.time_window.1));
-            xml.push_str(&format!("    <value>{}</value>\n", serde_json::to_string(&event.value).unwrap_or_default()));
+            xml.push_str(&format!(
+                "    <aggregation_type>{:?}</aggregation_type>\n",
+                event.aggregation_type
+            ));
+            xml.push_str(&format!(
+                "    <grouping_key>{}</grouping_key>\n",
+                event.grouping_key
+            ));
+            xml.push_str(&format!(
+                "    <event_count>{}</event_count>\n",
+                event.event_count
+            ));
+            xml.push_str(&format!(
+                "    <time_window_start>{}</time_window_start>\n",
+                event.time_window.0
+            ));
+            xml.push_str(&format!(
+                "    <time_window_end>{}</time_window_end>\n",
+                event.time_window.1
+            ));
+            xml.push_str(&format!(
+                "    <value>{}</value>\n",
+                serde_json::to_string(&event.value).unwrap_or_default()
+            ));
             xml.push_str("  </aggregated_event>\n");
         }
-        
+
         xml.push_str("</aggregated_events>");
         Ok(xml)
     }
 
-    fn aggregated_events_to_text(&self, events: &[AggregatedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn aggregated_events_to_text(
+        &self,
+        events: &[AggregatedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut text = String::new();
-        
+
         for event in events {
             text.push_str(&format!(
                 "{} {} - {} events from {} to {}\n",
@@ -752,13 +856,17 @@ impl FileExportDestination {
                 event.time_window.1
             ));
         }
-        
+
         Ok(text)
     }
 
-    fn aggregated_events_to_syslog(&self, events: &[AggregatedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn aggregated_events_to_syslog(
+        &self,
+        events: &[AggregatedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut syslog = String::new();
-        
+
         for event in events {
             syslog.push_str(&format!(
                 "<6> {} {} agent-gateway-enforcer: Aggregated {} events - {}\n",
@@ -768,19 +876,23 @@ impl FileExportDestination {
                 event.aggregation_type
             ));
         }
-        
+
         Ok(syslog)
     }
 
-    fn aggregated_events_to_elasticsearch(&self, events: &[AggregatedEvent], options: &ExportOptions) -> crate::Result<String> {
+    fn aggregated_events_to_elasticsearch(
+        &self,
+        events: &[AggregatedEvent],
+        options: &ExportOptions,
+    ) -> crate::Result<String> {
         let mut bulk = String::new();
-        
+
         for event in events {
             // Index action
             bulk.push_str(&format!(
                 "{{\"index\":{{\"_index\":\"agent-gateway-aggregated-events\"}}}}\n"
             ));
-            
+
             // Document
             let doc = serde_json::json!({
                 "@timestamp": event.timestamp,
@@ -794,11 +906,11 @@ impl FileExportDestination {
                 },
                 "value": event.value
             });
-            
+
             bulk.push_str(&serde_json::to_string(&doc).unwrap());
             bulk.push('\n');
         }
-        
+
         Ok(bulk)
     }
 }
@@ -817,12 +929,26 @@ impl HttpExportDestination {
 
 #[async_trait::async_trait]
 impl ExportDestination for HttpExportDestination {
-    async fn export(&self, _events: &[UnifiedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("HTTP export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _events: &[UnifiedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "HTTP export not yet implemented".to_string()
+        ))
     }
 
-    async fn export_aggregated(&self, _events: &[AggregatedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("HTTP export not yet implemented".to_string()))
+    async fn export_aggregated(
+        &self,
+        _events: &[AggregatedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "HTTP export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -847,12 +973,26 @@ impl SyslogExportDestination {
 
 #[async_trait::async_trait]
 impl ExportDestination for SyslogExportDestination {
-    async fn export(&self, _events: &[UnifiedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Syslog export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _events: &[UnifiedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Syslog export not yet implemented".to_string()
+        ))
     }
 
-    async fn export_aggregated(&self, _events: &[AggregatedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Syslog export not yet implemented".to_string()))
+    async fn export_aggregated(
+        &self,
+        _events: &[AggregatedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Syslog export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -877,12 +1017,26 @@ impl DatabaseExportDestination {
 
 #[async_trait::async_trait]
 impl ExportDestination for DatabaseExportDestination {
-    async fn export(&self, _events: &[UnifiedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Database export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _events: &[UnifiedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Database export not yet implemented".to_string()
+        ))
     }
 
-    async fn export_aggregated(&self, _events: &[AggregatedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Database export not yet implemented".to_string()))
+    async fn export_aggregated(
+        &self,
+        _events: &[AggregatedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Database export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -907,12 +1061,26 @@ impl MessageQueueExportDestination {
 
 #[async_trait::async_trait]
 impl ExportDestination for MessageQueueExportDestination {
-    async fn export(&self, _events: &[UnifiedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Message queue export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _events: &[UnifiedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Message queue export not yet implemented".to_string()
+        ))
     }
 
-    async fn export_aggregated(&self, _events: &[AggregatedEvent], _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Message queue export not yet implemented".to_string()))
+    async fn export_aggregated(
+        &self,
+        _events: &[AggregatedEvent],
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Message queue export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -927,7 +1095,7 @@ impl ExportDestination for MessageQueueExportDestination {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{SystemAction, EventSource};
+    use crate::events::{EventSource, SystemAction};
 
     #[tokio::test]
     async fn test_event_exporter_basic() {
@@ -959,14 +1127,12 @@ mod tests {
         exporter.add_export_config(export_config).await.unwrap();
 
         // Test export
-        let events = vec![
-            UnifiedEvent::system(
-                SystemAction::Started,
-                "test".to_string(),
-                "Test event".to_string(),
-                EventSource::Core,
-            ),
-        ];
+        let events = vec![UnifiedEvent::system(
+            SystemAction::Started,
+            "test".to_string(),
+            "Test event".to_string(),
+            EventSource::Core,
+        )];
 
         let results = exporter.export_events(events).await.unwrap();
         assert!(results.contains_key("test_file"));
@@ -981,14 +1147,12 @@ mod tests {
             compression: None,
         });
 
-        let events = vec![
-            UnifiedEvent::system(
-                SystemAction::Started,
-                "test".to_string(),
-                "Test event".to_string(),
-                EventSource::Core,
-            ),
-        ];
+        let events = vec![UnifiedEvent::system(
+            SystemAction::Started,
+            "test".to_string(),
+            "Test event".to_string(),
+            EventSource::Core,
+        )];
 
         let options = ExportOptions {
             include_metadata: true,
@@ -999,7 +1163,9 @@ mod tests {
             batch_size: None,
         };
 
-        let result = destination.export(&events, ExportFormat::Json, &options).await;
+        let result = destination
+            .export(&events, ExportFormat::Json, &options)
+            .await;
         assert!(result.is_ok());
     }
 

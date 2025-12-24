@@ -16,7 +16,9 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 
 /// Helper to create a test web server
-async fn create_test_server(port: u16) -> (
+async fn create_test_server(
+    port: u16,
+) -> (
     Arc<RwLock<ConfigManager>>,
     Arc<MetricsRegistry>,
     Arc<EventBus>,
@@ -302,7 +304,9 @@ async fn test_cors_headers() {
         .unwrap();
 
     // CORS headers should be present
-    assert!(response.headers().contains_key("access-control-allow-origin"));
+    assert!(response
+        .headers()
+        .contains_key("access-control-allow-origin"));
 }
 
 #[tokio::test]
@@ -326,12 +330,9 @@ async fn test_not_found_endpoint() {
     wait_for_server(port).await;
 
     // Test non-existent endpoint
-    let response = reqwest::get(format!(
-        "http://127.0.0.1:{}/api/v1/nonexistent",
-        port
-    ))
-    .await
-    .unwrap();
+    let response = reqwest::get(format!("http://127.0.0.1:{}/api/v1/nonexistent", port))
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), 404);
 

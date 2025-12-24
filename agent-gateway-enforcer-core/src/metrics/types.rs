@@ -640,7 +640,7 @@ mod tests {
         let value = MetricValue::Counter(42);
         let serialized = serde_json::to_string(&value).unwrap();
         let deserialized: MetricValue = serde_json::from_str(&serialized).unwrap();
-        
+
         match deserialized {
             MetricValue::Counter(count) => assert_eq!(count, 42),
             _ => panic!("Expected Counter value"),
@@ -653,18 +653,16 @@ mod tests {
             name: "test_metric".to_string(),
             help: "Test metric".to_string(),
             r#type: MetricType::Counter,
-            metrics: vec![
-                Metric {
-                    labels: HashMap::from([("label1".to_string(), "value1".to_string())]),
-                    value: MetricValue::Counter(1),
-                    timestamp: Some(1234567890),
-                },
-            ],
+            metrics: vec![Metric {
+                labels: HashMap::from([("label1".to_string(), "value1".to_string())]),
+                value: MetricValue::Counter(1),
+                timestamp: Some(1234567890),
+            }],
         };
 
         let serialized = serde_json::to_string(&family).unwrap();
         let deserialized: MetricFamily = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(deserialized.name, "test_metric");
         assert_eq!(deserialized.r#type, MetricType::Counter);
         assert_eq!(deserialized.metrics.len(), 1);
@@ -674,11 +672,14 @@ mod tests {
     fn test_time_range() {
         let start = chrono::Utc::now();
         let end = start + chrono::Duration::hours(1);
-        
+
         let time_range = TimeRange { start, end };
-        
+
         assert!(time_range.end > time_range.start);
-        assert_eq!(time_range.end - time_range.start, chrono::Duration::hours(1));
+        assert_eq!(
+            time_range.end - time_range.start,
+            chrono::Duration::hours(1)
+        );
     }
 
     #[test]

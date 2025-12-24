@@ -1,7 +1,7 @@
 //! Backend lifecycle management
 
-use super::{BackendHealth, BackendType, EnforcementBackend, HealthStatus, Result, UnifiedConfig};
 use super::registry::BackendRegistry;
+use super::{BackendHealth, BackendType, EnforcementBackend, HealthStatus, Result, UnifiedConfig};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -39,7 +39,7 @@ impl BackendLifecycleManager {
             registry,
         }
     }
-    
+
     /// Initialize and start a specific backend
     ///
     /// This method will:
@@ -68,36 +68,40 @@ impl BackendLifecycleManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn start_backend(&self, backend_type: &BackendType, _config: &UnifiedConfig) -> Result<()> {
+    pub async fn start_backend(
+        &self,
+        backend_type: &BackendType,
+        _config: &UnifiedConfig,
+    ) -> Result<()> {
         // Stop current backend if running
         self.stop_current_backend()?;
-        
+
         // Create new backend
         let backend = self.registry.get_backend(backend_type).await?;
-        
+
         // Get mutable access to the backend
         // Note: We need to work around the fact that Arc<dyn Trait> doesn't allow
         // direct mutation. In a real implementation, we'd need interior mutability
         // or a different design pattern.
-        
+
         // For now, we'll use a workaround by getting the Arc and calling methods
         // that take &mut self through unsafe transmute or by redesigning the trait
         // to use interior mutability. Let's use a simpler approach for now.
-        
+
         // Create a temporary clone for initialization
         let backend_arc = Arc::clone(&backend);
-        
+
         // Initialize backend (trait methods need &mut self, so we need to handle this carefully)
         // In practice, backends would use interior mutability (RwLock, Mutex) internally
         // For now, we'll document this limitation
-        
+
         // Store as current backend
         let mut current = self.current_backend.blocking_write();
         *current = Some(backend_arc);
-        
+
         Ok(())
     }
-    
+
     /// Auto-detect and start the appropriate backend for the current platform
     ///
     /// This is a convenience method that automatically selects the best
@@ -121,7 +125,7 @@ impl BackendLifecycleManager {
     pub async fn auto_start(&self, config: &UnifiedConfig) -> Result<()> {
         self.start_backend(&BackendType::Auto, config).await
     }
-    
+
     /// Stop the currently running backend
     ///
     /// This method gracefully stops and cleans up the current backend.
@@ -145,7 +149,7 @@ impl BackendLifecycleManager {
         }
         Ok(())
     }
-    
+
     /// Get a reference to the current backend
     ///
     /// # Returns
@@ -169,7 +173,7 @@ impl BackendLifecycleManager {
             guard.clone()
         })
     }
-    
+
     /// Check if a backend is currently running
     ///
     /// # Examples
@@ -182,11 +186,9 @@ impl BackendLifecycleManager {
     /// # }
     /// ```
     pub fn is_running(&self) -> bool {
-        tokio::task::block_in_place(|| {
-            self.current_backend.blocking_read().is_some()
-        })
+        tokio::task::block_in_place(|| self.current_backend.blocking_read().is_some())
     }
-    
+
     /// Perform a health check on the current backend
     ///
     /// # Returns
@@ -213,7 +215,7 @@ impl BackendLifecycleManager {
             })
         }
     }
-    
+
     /// Reconfigure the current backend
     ///
     /// This method updates the configuration of the running backend without
@@ -244,7 +246,7 @@ impl BackendLifecycleManager {
             Err(anyhow::anyhow!("No backend is currently running"))
         }
     }
-    
+
     /// Get registry used by this lifecycle manager
     pub fn registry(&self) -> Arc<BackendRegistry> {
         Arc::clone(&self.registry)
@@ -259,7 +261,7 @@ mod tests {
     async fn test_lifecycle_manager_creation() {
         let registry = Arc::new(BackendRegistry::new());
         let lifecycle = BackendLifecycleManager::new(registry);
-        
+
         assert!(!lifecycle.is_running().await);
     }
 
@@ -267,7 +269,7 @@ mod tests {
     async fn test_health_check_no_backend() {
         let registry = Arc::new(BackendRegistry::new());
         let lifecycle = BackendLifecycleManager::new(registry);
-        
+
         let health = lifecycle.health_check().await.unwrap();
         assert_eq!(health.status, HealthStatus::Unknown);
         assert_eq!(health.details, "No backend running");
@@ -277,7 +279,7 @@ mod tests {
     async fn test_stop_when_no_backend() {
         let registry = Arc::new(BackendRegistry::new());
         let lifecycle = BackendLifecycleManager::new(registry);
-        
+
         // Should not error when stopping with no backend running
         let result = lifecycle.stop_current_backend().await;
         assert!(result.is_ok());
@@ -287,7 +289,7 @@ mod tests {
     async fn test_reconfigure_no_backend() {
         let registry = Arc::new(BackendRegistry::new());
         let lifecycle = BackendLifecycleManager::new(registry);
-        
+
         let config = UnifiedConfig::default();
         let result = lifecycle.reconfigure(&config).await;
         assert!(result.is_err());
@@ -297,7 +299,7 @@ mod tests {
     async fn test_current_backend_none() {
         let registry = Arc::new(BackendRegistry::new());
         let lifecycle = BackendLifecycleManager::new(registry);
-        
+
         assert!(lifecycle.current_backend().await.is_none());
     }
 
@@ -305,7 +307,7 @@ mod tests {
     async fn test_registry_access() {
         let registry = Arc::new(BackendRegistry::new());
         let lifecycle = BackendLifecycleManager::new(Arc::clone(&registry));
-        
+
         let lifecycle_registry = lifecycle.registry();
         assert!(Arc::ptr_eq(&registry, &lifecycle_registry));
     }

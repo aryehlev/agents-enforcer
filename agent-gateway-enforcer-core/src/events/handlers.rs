@@ -1,9 +1,9 @@
 //! Event handlers and filters for the unified event system
 
-use crate::events::{UnifiedEvent, EventType, EventSource, EventSeverity};
+use crate::events::{EventSeverity, EventSource, EventType, UnifiedEvent};
+use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 /// Trait for handling events
 #[async_trait]
@@ -132,9 +132,9 @@ impl EventTagFilter {
 
 impl EventFilter for EventTagFilter {
     fn matches(&self, event: &UnifiedEvent) -> bool {
-        self.required_tags.iter().all(|(key, value)| {
-            event.metadata.tags.get(key) == Some(value)
-        })
+        self.required_tags
+            .iter()
+            .all(|(key, value)| event.metadata.tags.get(key) == Some(value))
     }
 
     fn description(&self) -> &str {
@@ -407,56 +407,68 @@ impl MetricsEventHandler {
 impl EventHandler for MetricsEventHandler {
     async fn handle_event(&self, event: UnifiedEvent) -> crate::Result<()> {
         // Update event counters
-        self.metrics.events.events_by_type
+        self.metrics
+            .events
+            .events_by_type
             .with_label_values(&[&event.event_type.to_string()])
             .inc();
-        self.metrics.events.events_by_source
+        self.metrics
+            .events
+            .events_by_source
             .with_label_values(&[&event.source.to_string()])
             .inc();
-        self.metrics.events.events_by_severity
+        self.metrics
+            .events
+            .events_by_severity
             .with_label_values(&[event.severity.as_str()])
             .inc();
 
         // Update specific metrics based on event type
         match &event.data {
-            crate::events::EventData::Network(network_event) => {
-                match network_event.action {
-                    crate::events::NetworkAction::Blocked => {
-                        self.metrics.network.network_blocked_total
-                            .with_label_values(&["", "", ""])
-                            .inc();
-                    }
-                    crate::events::NetworkAction::Allowed => {
-                        self.metrics.network.network_allowed_total
-                            .with_label_values(&["", "", ""])
-                            .inc();
-                    }
-                    crate::events::NetworkAction::RateLimited => {
-                        self.metrics.network.network_rate_limited_total.inc();
-                    }
-                    crate::events::NetworkAction::Unknown => {}
+            crate::events::EventData::Network(network_event) => match network_event.action {
+                crate::events::NetworkAction::Blocked => {
+                    self.metrics
+                        .network
+                        .network_blocked_total
+                        .with_label_values(&["", "", ""])
+                        .inc();
                 }
-            }
-            crate::events::EventData::FileAccess(file_event) => {
-                match file_event.action {
-                    crate::events::FileAction::Blocked => {
-                        self.metrics.files.file_blocked_total
-                            .with_label_values(&["", ""])
-                            .inc();
-                    }
-                    crate::events::FileAction::Allowed => {
-                        self.metrics.files.file_allowed_total
-                            .with_label_values(&["", ""])
-                            .inc();
-                    }
-                    crate::events::FileAction::Quarantined => {
-                        self.metrics.files.file_quarantined_total.inc();
-                    }
-                    crate::events::FileAction::Unknown => {}
+                crate::events::NetworkAction::Allowed => {
+                    self.metrics
+                        .network
+                        .network_allowed_total
+                        .with_label_values(&["", "", ""])
+                        .inc();
                 }
-            }
+                crate::events::NetworkAction::RateLimited => {
+                    self.metrics.network.network_rate_limited_total.inc();
+                }
+                crate::events::NetworkAction::Unknown => {}
+            },
+            crate::events::EventData::FileAccess(file_event) => match file_event.action {
+                crate::events::FileAction::Blocked => {
+                    self.metrics
+                        .files
+                        .file_blocked_total
+                        .with_label_values(&["", ""])
+                        .inc();
+                }
+                crate::events::FileAction::Allowed => {
+                    self.metrics
+                        .files
+                        .file_allowed_total
+                        .with_label_values(&["", ""])
+                        .inc();
+                }
+                crate::events::FileAction::Quarantined => {
+                    self.metrics.files.file_quarantined_total.inc();
+                }
+                crate::events::FileAction::Unknown => {}
+            },
             crate::events::EventData::Security(_) => {
-                self.metrics.security.security_events_total
+                self.metrics
+                    .security
+                    .security_events_total
                     .with_label_values(&["", ""])
                     .inc();
             }
@@ -479,7 +491,7 @@ mod tests {
     #[test]
     fn test_event_type_filter() {
         let filter = EventTypeFilter::single(EventType::Network);
-        
+
         let network_event = UnifiedEvent::network(
             crate::events::NetworkAction::Blocked,
             "192.168.1.1".parse().unwrap(),
@@ -488,14 +500,14 @@ mod tests {
             None,
             EventSource::Core,
         );
-        
+
         let system_event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
             "Test".to_string(),
             EventSource::Core,
         );
-        
+
         assert!(filter.matches(&network_event));
         assert!(!filter.matches(&system_event));
     }
@@ -503,21 +515,21 @@ mod tests {
     #[test]
     fn test_event_source_filter() {
         let filter = EventSourceFilter::single(EventSource::Core);
-        
+
         let core_event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
             "Test".to_string(),
             EventSource::Core,
         );
-        
+
         let cli_event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
             "Test".to_string(),
             EventSource::Cli,
         );
-        
+
         assert!(filter.matches(&core_event));
         assert!(!filter.matches(&cli_event));
     }
@@ -525,7 +537,7 @@ mod tests {
     #[test]
     fn test_event_severity_filter() {
         let filter = EventSeverityFilter::new(EventSeverity::Warning);
-        
+
         let warning_event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
@@ -533,7 +545,7 @@ mod tests {
             EventSource::Core,
         );
         warning_event.severity = EventSeverity::Warning;
-        
+
         let info_event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
@@ -541,7 +553,7 @@ mod tests {
             EventSource::Core,
         );
         info_event.severity = EventSeverity::Info;
-        
+
         assert!(filter.matches(&warning_event));
         assert!(!filter.matches(&info_event));
     }
@@ -550,18 +562,15 @@ mod tests {
     fn test_and_filter() {
         let type_filter = EventTypeFilter::single(EventType::System);
         let source_filter = EventSourceFilter::single(EventSource::Core);
-        let and_filter = AndFilter::new(vec![
-            Arc::new(type_filter),
-            Arc::new(source_filter),
-        ]);
-        
+        let and_filter = AndFilter::new(vec![Arc::new(type_filter), Arc::new(source_filter)]);
+
         let matching_event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
             "Test".to_string(),
             EventSource::Core,
         );
-        
+
         let non_matching_event = UnifiedEvent::network(
             crate::events::NetworkAction::Blocked,
             "192.168.1.1".parse().unwrap(),
@@ -570,7 +579,7 @@ mod tests {
             None,
             EventSource::Core,
         );
-        
+
         assert!(and_filter.matches(&matching_event));
         assert!(!and_filter.matches(&non_matching_event));
     }
@@ -578,20 +587,20 @@ mod tests {
     #[tokio::test]
     async fn test_buffer_event_handler() {
         let handler = BufferEventHandler::new("test".to_string(), 100);
-        
+
         let event = UnifiedEvent::system(
             SystemAction::Started,
             "test".to_string(),
             "Test".to_string(),
             EventSource::Core,
         );
-        
+
         handler.handle_event(event.clone()).await.unwrap();
-        
+
         let events = handler.get_events().await;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, event.id);
-        
+
         let system_events = handler.get_events_by_type(EventType::System).await;
         assert_eq!(system_events.len(), 1);
     }

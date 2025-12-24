@@ -393,11 +393,11 @@ impl Platform {
         return Platform::MacOS;
         #[cfg(target_os = "windows")]
         return Platform::Windows;
-        
+
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         return Platform::Linux; // Default to Linux for unknown platforms
     }
-    
+
     /// Check if platform is supported
     pub fn is_supported(&self) -> bool {
         match self {
@@ -428,8 +428,12 @@ impl std::fmt::Display for ConfigValidationError {
             ConfigValidationError::InvalidFileRule(msg) => write!(f, "Invalid file rule: {}", msg),
             ConfigValidationError::InvalidPath(msg) => write!(f, "Invalid path: {}", msg),
             ConfigValidationError::InvalidPort(port) => write!(f, "Invalid port: {}", port),
-            ConfigValidationError::MissingRequiredField(field) => write!(f, "Missing required field: {}", field),
-            ConfigValidationError::UnsupportedPlatform(platform) => write!(f, "Unsupported platform: {}", platform),
+            ConfigValidationError::MissingRequiredField(field) => {
+                write!(f, "Missing required field: {}", field)
+            }
+            ConfigValidationError::UnsupportedPlatform(platform) => {
+                write!(f, "Unsupported platform: {}", platform)
+            }
         }
     }
 }
@@ -455,7 +459,7 @@ impl ConfigTemplate {
             ConfigTemplate::Security => self.security_config(),
         }
     }
-    
+
     fn minimal_config(&self) -> UnifiedConfig {
         UnifiedConfig {
             version: "1.0".to_string(),
@@ -506,7 +510,7 @@ impl ConfigTemplate {
             agents: vec![],
         }
     }
-    
+
     fn development_config(&self) -> UnifiedConfig {
         let mut config = self.minimal_config();
         config.metrics.enabled = true;
@@ -516,7 +520,7 @@ impl ConfigTemplate {
         config.ui.web_dashboard.enabled = true;
         config
     }
-    
+
     fn production_config(&self) -> UnifiedConfig {
         let mut config = self.minimal_config();
         config.metrics.enabled = true;
@@ -527,7 +531,7 @@ impl ConfigTemplate {
         config.file_access.default_policy = DefaultPolicy::Deny;
         config
     }
-    
+
     fn security_config(&self) -> UnifiedConfig {
         let mut config = self.production_config();
         config.file_access.default_policy = DefaultPolicy::Deny;
@@ -541,7 +545,7 @@ impl ConfigTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_default_config() {
         let config = UnifiedConfig::default();
@@ -549,7 +553,7 @@ mod tests {
         assert_eq!(config.metrics.port, 9090);
         assert_eq!(config.logging.level, LogLevel::Info);
     }
-    
+
     #[test]
     fn test_config_serialization() {
         let config = UnifiedConfig::default();
@@ -557,27 +561,27 @@ mod tests {
         let deserialized: UnifiedConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(config.version, deserialized.version);
     }
-    
+
     #[test]
     fn test_platform_detection() {
         let platform = Platform::current();
         assert!(platform.is_supported());
     }
-    
+
     #[test]
     fn test_config_templates() {
         let minimal = ConfigTemplate::Minimal.generate_config();
         assert!(!minimal.metrics.enabled);
-        
+
         let dev = ConfigTemplate::Development.generate_config();
         assert!(dev.metrics.enabled);
         assert_eq!(dev.logging.level, LogLevel::Debug);
-        
+
         let prod = ConfigTemplate::Production.generate_config();
         assert!(prod.metrics.enabled);
         assert_eq!(prod.logging.level, LogLevel::Warn);
     }
-    
+
     #[test]
     fn test_gateway_config_default() {
         let gateway = GatewayConfig::default();
@@ -586,14 +590,14 @@ mod tests {
         assert_eq!(gateway.protocols.len(), 1);
         assert!(matches!(gateway.protocols[0], NetworkProtocol::Tcp));
     }
-    
+
     #[test]
     fn test_file_access_config_default() {
         let file_access = FileAccessConfig::default();
         assert!(file_access.enabled);
         assert!(matches!(file_access.default_policy, DefaultPolicy::Allow));
     }
-    
+
     #[test]
     fn test_validation_error_display() {
         let error = ConfigValidationError::InvalidPort(80);

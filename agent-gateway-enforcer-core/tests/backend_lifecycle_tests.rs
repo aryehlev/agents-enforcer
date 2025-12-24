@@ -83,7 +83,10 @@ async fn test_lifecycle_manager_start_backend() {
     let config = create_test_config();
 
     // Start the backend
-    lifecycle.start_backend(&backend_type, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type, &config)
+        .await
+        .unwrap();
 
     // Verify backend is running
     assert!(lifecycle.is_running());
@@ -140,7 +143,10 @@ async fn test_lifecycle_manager_stop() {
     let config = create_test_config();
 
     // Start and then stop
-    lifecycle.start_backend(&backend_type, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type, &config)
+        .await
+        .unwrap();
     assert!(lifecycle.is_running());
 
     lifecycle.stop_current_backend().unwrap();
@@ -175,7 +181,10 @@ async fn test_lifecycle_manager_health_check() {
     assert_eq!(health.details, "No backend running");
 
     // Start backend and check health
-    lifecycle.start_backend(&backend_type, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type, &config)
+        .await
+        .unwrap();
     let health = lifecycle.health_check().await.unwrap();
     assert_eq!(health.status, HealthStatus::Healthy);
 }
@@ -203,17 +212,22 @@ async fn test_lifecycle_manager_reconfigure() {
     let mut config = create_test_config();
 
     // Start backend
-    lifecycle.start_backend(&backend_type, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type, &config)
+        .await
+        .unwrap();
 
     // Reconfigure with new settings
-    config.gateways.push(agent_gateway_enforcer_common::config::GatewayConfig {
-        address: "10.0.0.2".to_string(),
-        description: Some("Second Gateway".to_string()),
-        protocols: vec![agent_gateway_enforcer_common::config::NetworkProtocol::Udp],
-        enabled: true,
-        priority: 2,
-        tags: vec![],
-    });
+    config
+        .gateways
+        .push(agent_gateway_enforcer_common::config::GatewayConfig {
+            address: "10.0.0.2".to_string(),
+            description: Some("Second Gateway".to_string()),
+            protocols: vec![agent_gateway_enforcer_common::config::NetworkProtocol::Udp],
+            enabled: true,
+            priority: 2,
+            tags: vec![],
+        });
 
     lifecycle.reconfigure(&config).unwrap();
     // Reconfigure should succeed without errors
@@ -256,11 +270,17 @@ async fn test_lifecycle_manager_switch_backends() {
     let config = create_test_config();
 
     // Start first backend
-    lifecycle.start_backend(&backend_type1, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type1, &config)
+        .await
+        .unwrap();
     assert!(lifecycle.is_running());
 
     // Switch to second backend (should stop first and start second)
-    lifecycle.start_backend(&backend_type2, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type2, &config)
+        .await
+        .unwrap();
     assert!(lifecycle.is_running());
 
     // Verify we can get the current backend
@@ -294,7 +314,10 @@ async fn test_lifecycle_manager_current_backend() {
     assert!(lifecycle.current_backend().is_none());
 
     // Start backend
-    lifecycle.start_backend(&backend_type, &config).await.unwrap();
+    lifecycle
+        .start_backend(&backend_type, &config)
+        .await
+        .unwrap();
 
     // Should have a current backend
     let current = lifecycle.current_backend();

@@ -27,17 +27,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Agent Gateway Enforcer Web Dashboard...");
 
     // Create configuration manager
-    let config_path = std::env::var("CONFIG_PATH")
-        .unwrap_or_else(|_| "examples/config-example.yaml".to_string());
-    
+    let config_path =
+        std::env::var("CONFIG_PATH").unwrap_or_else(|_| "examples/config-example.yaml".to_string());
+
     println!("Loading configuration from: {}", config_path);
-    let config_manager = Arc::new(RwLock::new(
-        ConfigManager::from_file(&config_path)?
-    ));
+    let config_manager = Arc::new(RwLock::new(ConfigManager::from_file(&config_path)?));
 
     // Create metrics registry
     let metrics_registry = Arc::new(MetricsRegistry::new());
-    
+
     // Create event bus
     let event_bus = Arc::new(EventBus::new());
 
@@ -73,9 +71,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n===========================================");
     println!("Web Dashboard is ready!");
     println!("===========================================");
-    println!("  Dashboard: http://{}:{}", web_config.host, web_config.port);
-    println!("  API: http://{}:{}/api/v1/status", web_config.host, web_config.port);
-    println!("  WebSocket: ws://{}:{}/ws", web_config.host, web_config.port);
+    println!(
+        "  Dashboard: http://{}:{}",
+        web_config.host, web_config.port
+    );
+    println!(
+        "  API: http://{}:{}/api/v1/status",
+        web_config.host, web_config.port
+    );
+    println!(
+        "  WebSocket: ws://{}:{}/ws",
+        web_config.host, web_config.port
+    );
     println!("===========================================\n");
     println!("Press Ctrl+C to stop the server");
 

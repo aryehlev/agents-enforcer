@@ -2,9 +2,11 @@
 //!
 //! This tool helps migrate from legacy configuration formats to the new unified format.
 
-use clap::{Parser, Subcommand};
-use agent_gateway_enforcer_backend_ebpf_linux::migration::{ConfigMigrator, MigratorCli, MigrationArgs};
+use agent_gateway_enforcer_backend_ebpf_linux::migration::{
+    ConfigMigrator, MigrationArgs, MigratorCli,
+};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -23,23 +25,23 @@ enum Commands {
         /// Input configuration file
         #[arg(short, long)]
         input: PathBuf,
-        
+
         /// Output configuration file (optional, prints to stdout if not provided)
         #[arg(short, long)]
         output: Option<PathBuf>,
-        
+
         /// Validate only (don't migrate)
         #[arg(long)]
         validate_only: bool,
     },
-    
+
     /// Validate configuration file
     Validate {
         /// Configuration file to validate
         #[arg(short, long)]
         input: PathBuf,
     },
-    
+
     /// Show configuration schema
     Schema {
         /// Output format (json, toml)
@@ -51,17 +53,21 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    
+
     let cli = Cli::parse();
-    
+
     match cli.command {
-        Commands::Migrate { input, output, validate_only } => {
+        Commands::Migrate {
+            input,
+            output,
+            validate_only,
+        } => {
             let args = MigrationArgs {
                 input_file: input,
                 output_file: output,
                 validate_only,
             };
-            
+
             if validate_only {
                 let migrator = ConfigMigrator::new();
                 let config = migrator.load_and_migrate_file(&args.input_file)?;
@@ -70,27 +76,27 @@ async fn main() -> Result<()> {
             } else {
                 MigratorCli::run_migration(&args).await?;
             }
-        },
-        
+        }
+
         Commands::Validate { input } => {
             let migrator = ConfigMigrator::new();
             let config = migrator.load_and_migrate_file(&input)?;
             migrator.validate_config(&config)?;
             println!("Configuration is valid!");
-        },
-        
+        }
+
         Commands::Schema { format } => {
             let schema = generate_schema(&format)?;
             println!("{}", schema);
-        },
+        }
     }
-    
+
     Ok(())
 }
 
 fn generate_schema(format: &str) -> Result<String> {
     use serde_json::json;
-    
+
     let schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "Agent Gateway Enforcer Configuration",
@@ -151,7 +157,7 @@ fn generate_schema(format: &str) -> Result<String> {
             }
         }
     });
-    
+
     match format.to_lowercase().as_str() {
         "json" => Ok(serde_json::to_string_pretty(&schema)?),
         "toml" => Ok(toml::to_string_pretty(&schema)?),
@@ -177,7 +183,7 @@ mod tests {
     async fn test_migration_cli() {
         let temp_dir = tempdir().unwrap();
         let input_file = temp_dir.path().join("input.json");
-        
+
         // Create test input
         let legacy_config = r#"
         {
@@ -190,15 +196,15 @@ mod tests {
             }
         }
         "#;
-        
+
         fs::write(&input_file, legacy_config).unwrap();
-        
+
         let args = MigrationArgs {
             input_file: input_file.clone(),
             output_file: None,
             validate_only: false,
         };
-        
+
         // Should not panic
         let result = MigratorCli::run_migration(&args).await;
         assert!(result.is_ok());
@@ -208,7 +214,7 @@ mod tests {
     async fn test_validation_only() {
         let temp_dir = tempdir().unwrap();
         let input_file = temp_dir.path().join("input.json");
-        
+
         // Create valid test input
         let legacy_config = r#"
         {
@@ -221,15 +227,15 @@ mod tests {
             }
         }
         "#;
-        
+
         fs::write(&input_file, legacy_config).unwrap();
-        
+
         let args = MigrationArgs {
             input_file: input_file.clone(),
             output_file: None,
             validate_only: true,
         };
-        
+
         // Should not panic
         let result = MigratorCli::run_migration(&args).await;
         assert!(result.is_ok());

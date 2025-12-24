@@ -90,10 +90,7 @@ fn test_gateway_key_from_ip_string() {
     use agent_gateway_enforcer_common::GatewayKey;
 
     // Parse "10.0.0.1" into network byte order
-    let ip_parts: Vec<u8> = "10.0.0.1"
-        .split('.')
-        .map(|s| s.parse().unwrap())
-        .collect();
+    let ip_parts: Vec<u8> = "10.0.0.1".split('.').map(|s| s.parse().unwrap()).collect();
 
     let addr = u32::from_be_bytes([ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]]);
     let key = GatewayKey::new(addr.to_be(), 8080);
@@ -132,14 +129,8 @@ fn test_path_rule_permissions() {
 
     // Test combined permissions
     let read_write = PathRule::allow(FILE_PERM_READ | FILE_PERM_WRITE, true);
-    assert_eq!(
-        read_write.permissions & FILE_PERM_READ,
-        FILE_PERM_READ
-    );
-    assert_eq!(
-        read_write.permissions & FILE_PERM_WRITE,
-        FILE_PERM_WRITE
-    );
+    assert_eq!(read_write.permissions & FILE_PERM_READ, FILE_PERM_READ);
+    assert_eq!(read_write.permissions & FILE_PERM_WRITE, FILE_PERM_WRITE);
     assert_eq!(read_write.permissions & FILE_PERM_EXEC, 0);
 
     // Test all permissions
@@ -165,7 +156,10 @@ fn test_ebpf_program_can_be_loaded() {
         PathBuf::from("../target/bpf/agent-gateway-enforcer.bpf.o"),
     ];
 
-    let ebpf_path = ebpf_paths.iter().find(|p| p.exists()).expect("eBPF not found");
+    let ebpf_path = ebpf_paths
+        .iter()
+        .find(|p| p.exists())
+        .expect("eBPF not found");
 
     let result = Ebpf::load_file(ebpf_path);
 
@@ -203,7 +197,10 @@ fn test_ebpf_maps_exist() {
         PathBuf::from("../target/bpf/agent-gateway-enforcer.bpf.o"),
     ];
 
-    let ebpf_path = ebpf_paths.iter().find(|p| p.exists()).expect("eBPF not found");
+    let ebpf_path = ebpf_paths
+        .iter()
+        .find(|p| p.exists())
+        .expect("eBPF not found");
 
     if let Ok(bpf) = Ebpf::load_file(ebpf_path) {
         let maps: Vec<_> = bpf.maps().map(|(name, _)| name.to_string()).collect();
@@ -242,7 +239,10 @@ fn test_gateway_map_insert_and_lookup() {
         PathBuf::from("../target/bpf/agent-gateway-enforcer.bpf.o"),
     ];
 
-    let ebpf_path = ebpf_paths.iter().find(|p| p.exists()).expect("eBPF not found");
+    let ebpf_path = ebpf_paths
+        .iter()
+        .find(|p| p.exists())
+        .expect("eBPF not found");
 
     if let Ok(mut bpf) = Ebpf::load_file(ebpf_path) {
         // Get the ALLOWED_GATEWAYS map
@@ -291,10 +291,7 @@ fn test_gateway_address_parsing() {
         let parts: Vec<&str> = addr_str.split(':').collect();
         assert_eq!(parts.len(), 2, "Should have IP and port");
 
-        let ip_parts: Vec<u8> = parts[0]
-            .split('.')
-            .map(|s| s.parse().unwrap())
-            .collect();
+        let ip_parts: Vec<u8> = parts[0].split('.').map(|s| s.parse().unwrap()).collect();
         assert_eq!(ip_parts.len(), 4, "Should have 4 octets");
         assert_eq!(ip_parts.as_slice(), expected_octets);
 
@@ -342,7 +339,7 @@ fn test_invalid_gateway_addresses() {
 #[test]
 fn test_path_rules_map_operations() {
     use agent_gateway_enforcer_common::{PathKey, PathRule, FILE_PERM_READ, FILE_PERM_WRITE};
-    
+
     // Test creating path keys
     let paths = ["/etc/passwd", "/tmp/", "/home/user/.ssh"];
     for path in &paths {
@@ -350,15 +347,15 @@ fn test_path_rules_map_operations() {
         assert!(key.len > 0);
         assert!(key.len <= 255); // MAX_PATH_LEN - 1
     }
-    
+
     // Test creating rules
     let allow_read = PathRule::allow(FILE_PERM_READ, true);
     let deny_write = PathRule::deny(FILE_PERM_WRITE, false);
-    
+
     assert_eq!(allow_read.rule_type as u8, 0); // Allow
-    assert_eq!(deny_write.rule_type as u8, 1);  // Deny
-    assert_eq!(allow_read.is_prefix, 1);        // prefix match
-    assert_eq!(deny_write.is_prefix, 0);        // exact match
+    assert_eq!(deny_write.rule_type as u8, 1); // Deny
+    assert_eq!(allow_read.is_prefix, 1); // prefix match
+    assert_eq!(deny_write.is_prefix, 0); // exact match
 }
 
 #[test]
@@ -377,7 +374,10 @@ fn test_path_rules_map_insert_and_lookup() {
         PathBuf::from("../target/bpf/agent-gateway-enforcer.bpf.o"),
     ];
 
-    let ebpf_path = ebpf_paths.iter().find(|p| p.exists()).expect("eBPF not found");
+    let ebpf_path = ebpf_paths
+        .iter()
+        .find(|p| p.exists())
+        .expect("eBPF not found");
 
     if let Ok(mut bpf) = Ebpf::load_file(ebpf_path) {
         // Check if PATH_RULES map exists
@@ -388,20 +388,23 @@ fn test_path_rules_map_insert_and_lookup() {
             // Insert an allow rule for /etc/passwd
             let passwd_key = PathKey::new("/etc/passwd");
             let allow_rule = PathRule::allow(FILE_PERM_READ, true);
-            
-            path_rules.insert(passwd_key, allow_rule, 0)
+
+            path_rules
+                .insert(passwd_key, allow_rule, 0)
                 .expect("Failed to insert path rule");
 
             // Lookup the rule
             let value = path_rules.get(&passwd_key, 0);
             assert!(value.is_ok(), "Path rule should be found");
-            
+
             let retrieved_rule = value.unwrap();
             assert_eq!(retrieved_rule.rule_type as u8, 0); // Allow
             assert_eq!(retrieved_rule.permissions, FILE_PERM_READ);
 
             // Remove the rule
-            path_rules.remove(&passwd_key).expect("Failed to remove path rule");
+            path_rules
+                .remove(&passwd_key)
+                .expect("Failed to remove path rule");
 
             // Verify it's gone
             let value = path_rules.get(&passwd_key, 0);
@@ -429,7 +432,10 @@ fn test_default_deny_map_operations() {
         PathBuf::from("../target/bpf/agent-gateway-enforcer.bpf.o"),
     ];
 
-    let ebpf_path = ebpf_paths.iter().find(|p| p.exists()).expect("eBPF not found");
+    let ebpf_path = ebpf_paths
+        .iter()
+        .find(|p| p.exists())
+        .expect("eBPF not found");
 
     if let Ok(mut bpf) = Ebpf::load_file(ebpf_path) {
         // Check if DEFAULT_DENY map exists
@@ -439,7 +445,9 @@ fn test_default_deny_map_operations() {
 
             // Set default deny policy (0 = allow by default, 1 = deny by default)
             let key: u32 = 0;
-            default_deny.insert(key, 1, 0).expect("Failed to set default deny policy");
+            default_deny
+                .insert(key, 1, 0)
+                .expect("Failed to set default deny policy");
 
             // Lookup the policy
             let value = default_deny.get(&key, 0);
@@ -447,7 +455,9 @@ fn test_default_deny_map_operations() {
             assert_eq!(value.unwrap(), 1); // Deny by default
 
             // Change to allow by default
-            default_deny.insert(key, 0, 0).expect("Failed to change default policy");
+            default_deny
+                .insert(key, 0, 0)
+                .expect("Failed to change default policy");
             let value = default_deny.get(&key, 0);
             assert_eq!(value.unwrap(), 0); // Allow by default
 
@@ -533,29 +543,32 @@ fn test_file_blocked_event_creation() {
 fn test_path_prefix_matching_logic() {
     use agent_gateway_enforcer_common::PathKey;
 
-        let test_cases = [
-            ("/etc/passwd", "/etc/", true),
-            ("/etc/passwd", "/etc", true), // "/etc" should match "/etc/passwd" as prefix
-            ("/home/user/.bashrc", "/home/user/", true),
-            ("/home/user/.bashrc", "/home/", true),
-            ("/home/user/.bashrc", "/tmp/", false),
-            ("/tmp/file.txt", "/", true), // Root matches everything
-            ("/tmp/file.txt", "/tmp", true), // "/tmp" should match "/tmp/file.txt"
-        ];
+    let test_cases = [
+        ("/etc/passwd", "/etc/", true),
+        ("/etc/passwd", "/etc", true), // "/etc" should match "/etc/passwd" as prefix
+        ("/home/user/.bashrc", "/home/user/", true),
+        ("/home/user/.bashrc", "/home/", true),
+        ("/home/user/.bashrc", "/tmp/", false),
+        ("/tmp/file.txt", "/", true),    // Root matches everything
+        ("/tmp/file.txt", "/tmp", true), // "/tmp" should match "/tmp/file.txt"
+    ];
 
-        for (full_path, prefix, should_match) in test_cases {
-            let _full_key = PathKey::new(full_path);
-            let _prefix_key = PathKey::new(prefix);
+    for (full_path, prefix, should_match) in test_cases {
+        let _full_key = PathKey::new(full_path);
+        let _prefix_key = PathKey::new(prefix);
 
-            // For this test, check if full path starts with prefix
-            let actual_matches = full_path.starts_with(prefix);
+        // For this test, check if full path starts with prefix
+        let actual_matches = full_path.starts_with(prefix);
 
-            assert_eq!(
-                actual_matches, should_match,
-                "Path '{}' should {}match prefix '{}'",
-                full_path, if should_match { "" } else { "not " }, prefix
-            );
-        }
+        assert_eq!(
+            actual_matches,
+            should_match,
+            "Path '{}' should {}match prefix '{}'",
+            full_path,
+            if should_match { "" } else { "not " },
+            prefix
+        );
+    }
 }
 
 #[test]
@@ -567,7 +580,7 @@ fn test_file_access_enforcement_scenarios() {
     // Test scenario 1: Allow read access to /etc/passwd
     let passwd_key = PathKey::new("/etc/passwd");
     let allow_read_rule = PathRule::allow(FILE_PERM_READ, true);
-    
+
     // Simulate access check
     let requested = FILE_PERM_READ;
     let rule_matches = allow_read_rule.permissions & requested != 0;
@@ -584,13 +597,17 @@ fn test_file_access_enforcement_scenarios() {
     // Test scenario 3: Allow all access to /tmp/ (prefix rule)
     let tmp_key = PathKey::new("/tmp/");
     let allow_all_rule = PathRule::allow(FILE_PERM_ALL, true);
-    
+
     let test_files = ["/tmp/file.txt", "/tmp/subdir/file.log", "/tmp/.hidden"];
     for file_path in test_files {
         // Check if file starts with /tmp/
         let prefix_matches = file_path.starts_with("/tmp/");
-        assert!(prefix_matches, "File '{}' should match /tmp/ prefix", file_path);
-        
+        assert!(
+            prefix_matches,
+            "File '{}' should match /tmp/ prefix",
+            file_path
+        );
+
         // If prefix matches, the rule applies
         if prefix_matches {
             let allowed = allow_all_rule.rule_type == PathRuleType::Allow;
@@ -607,5 +624,8 @@ fn test_file_access_enforcement_scenarios() {
     } else {
         true // Would depend on rule result
     };
-    assert!(!allowed, "Should deny when no rule found and default is deny");
+    assert!(
+        !allowed,
+        "Should deny when no rule found and default is deny"
+    );
 }

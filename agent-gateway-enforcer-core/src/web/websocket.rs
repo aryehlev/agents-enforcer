@@ -2,9 +2,9 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use warp::ws::{Message, WebSocket};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+use warp::ws::{Message, WebSocket};
 
 use crate::events::bus::EventBus;
 
@@ -35,7 +35,8 @@ impl WebSocketConnection {
     pub fn send(&self, msg: WebSocketMessage) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string(&msg)?;
         let ws_msg = Message::text(json);
-        self.tx.send(Ok(ws_msg))
+        self.tx
+            .send(Ok(ws_msg))
             .map_err(|e| format!("Failed to send message: {}", e).into())
     }
 
@@ -47,10 +48,10 @@ impl WebSocketConnection {
 pub async fn handle_connection(ws: WebSocket, event_bus: Arc<EventBus>) {
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    
+
     let connection = Arc::new(WebSocketConnection::new(tx));
     let connection_id = connection.id().to_string();
-    
+
     info!("WebSocket connection established: {}", connection_id);
 
     // Spawn task to forward messages from channel to WebSocket
@@ -84,7 +85,7 @@ pub async fn handle_connection(ws: WebSocket, event_bus: Arc<EventBus>) {
                 if msg.is_text() {
                     if let Ok(text) = msg.to_str() {
                         debug!("Received WebSocket message: {}", text);
-                        
+
                         match serde_json::from_str::<WebSocketMessage>(text) {
                             Ok(WebSocketMessage::Ping) => {
                                 let pong = WebSocketMessage::Pong;
@@ -97,9 +98,10 @@ pub async fn handle_connection(ws: WebSocket, event_bus: Arc<EventBus>) {
                             }
                             Err(e) => {
                                 warn!("Invalid message format: {}", e);
-                                let error_msg = WebSocketMessage::Error(
-                                    format!("Invalid message format: {}", e)
-                                );
+                                let error_msg = WebSocketMessage::Error(format!(
+                                    "Invalid message format: {}",
+                                    e
+                                ));
                                 let _ = connection.send(error_msg);
                             }
                         }
@@ -143,7 +145,7 @@ mod tests {
         let json = r#"{"type":"Ping"}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::Ping => {},
+            WebSocketMessage::Ping => {}
             _ => panic!("Expected Ping message"),
         }
     }

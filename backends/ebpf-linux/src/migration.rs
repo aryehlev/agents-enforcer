@@ -3,8 +3,8 @@
 //! This module provides utilities for migrating from old configuration formats
 //! to the new unified configuration system.
 
-use agent_gateway_enforcer_core::backend::{GatewayConfig, FileAccessConfig, UnifiedConfig};
-use anyhow::{Result, anyhow};
+use agent_gateway_enforcer_core::backend::{FileAccessConfig, GatewayConfig, UnifiedConfig};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -68,7 +68,8 @@ impl ConfigMigrator {
         let mut gateways = Vec::new();
 
         for (index, gateway_str) in gateway_strings.iter().enumerate() {
-            let gateway = self.parse_gateway_string(gateway_str)
+            let gateway = self
+                .parse_gateway_string(gateway_str)
                 .ok_or_else(|| anyhow!("Invalid gateway format: {}", gateway_str))?;
 
             gateways.push(GatewayConfig {
@@ -128,8 +129,8 @@ impl ConfigMigrator {
             self.migrate_legacy_config(legacy)
         } else {
             // Try TOML format
-            let legacy: LegacyConfig = toml::from_str(content)
-                .map_err(|e| anyhow!("Failed to parse TOML: {}", e))?;
+            let legacy: LegacyConfig =
+                toml::from_str(content).map_err(|e| anyhow!("Failed to parse TOML: {}", e))?;
             self.migrate_legacy_config(legacy)
         }
     }
@@ -163,17 +164,26 @@ impl ConfigMigrator {
     }
 
     /// Generate migration report
-    pub fn generate_migration_report(&self, legacy: &LegacyConfig, unified: &UnifiedConfig) -> MigrationReport {
+    pub fn generate_migration_report(
+        &self,
+        legacy: &LegacyConfig,
+        unified: &UnifiedConfig,
+    ) -> MigrationReport {
         MigrationReport {
             original_gateways: legacy.gateways.len(),
             migrated_gateways: unified.gateways.len(),
-            file_enforcement_enabled: legacy.file_enforcement
+            file_enforcement_enabled: legacy
+                .file_enforcement
                 .as_ref()
                 .map(|f| f.enabled)
                 .unwrap_or(false),
             allowed_paths_count: unified.file_access.allowed_paths.len(),
             denied_paths_count: unified.file_access.denied_paths.len(),
-            backend_settings_count: if unified.backend_settings.is_null() { 0 } else { 1 },
+            backend_settings_count: if unified.backend_settings.is_null() {
+                0
+            } else {
+                1
+            },
         }
     }
 }
@@ -220,7 +230,10 @@ impl MigratorCli {
         let unified = if args.input_file.exists() {
             migrator.load_and_migrate_file(&args.input_file)?
         } else {
-            return Err(anyhow!("Input file does not exist: {}", args.input_file.display()));
+            return Err(anyhow!(
+                "Input file does not exist: {}",
+                args.input_file.display()
+            ));
         };
 
         // Validate configuration
@@ -235,7 +248,10 @@ impl MigratorCli {
             };
 
             fs::write(output_file, content)?;
-            println!("Migrated configuration written to: {}", output_file.display());
+            println!(
+                "Migrated configuration written to: {}",
+                output_file.display()
+            );
         } else {
             // Print to stdout
             let output = serde_json::to_string_pretty(&unified)?;
@@ -283,21 +299,12 @@ mod tests {
         let migrator = ConfigMigrator::new();
 
         let legacy = LegacyConfig {
-            gateways: vec![
-                "10.0.0.1:8080".to_string(),
-                "192.168.1.100:443".to_string(),
-            ],
+            gateways: vec!["10.0.0.1:8080".to_string(), "192.168.1.100:443".to_string()],
             file_enforcement: Some(LegacyFileEnforcement {
                 enabled: true,
                 default_deny: Some(true),
-                allow_paths: Some(vec![
-                    "/tmp/allowed".to_string(),
-                    "/var/log".to_string(),
-                ]),
-                deny_paths: Some(vec![
-                    "/etc/shadow".to_string(),
-                    "/root".to_string(),
-                ]),
+                allow_paths: Some(vec!["/tmp/allowed".to_string(), "/var/log".to_string()]),
+                deny_paths: Some(vec!["/etc/shadow".to_string(), "/root".to_string()]),
             }),
             settings: None,
         };
@@ -321,14 +328,12 @@ mod tests {
 
         // Valid config
         let valid_config = UnifiedConfig {
-            gateways: vec![
-                GatewayConfig {
-                    address: "10.0.0.1".to_string(),
-                    port: 8080,
-                    enabled: true,
-                    description: None,
-                },
-            ],
+            gateways: vec![GatewayConfig {
+                address: "10.0.0.1".to_string(),
+                port: 8080,
+                enabled: true,
+                description: None,
+            }],
             file_access: FileAccessConfig {
                 allowed_paths: vec!["/tmp".to_string()],
                 denied_paths: vec!["/etc".to_string()],
@@ -341,14 +346,12 @@ mod tests {
 
         // Invalid config - empty gateway address
         let invalid_config = UnifiedConfig {
-            gateways: vec![
-                GatewayConfig {
-                    address: "".to_string(),
-                    port: 8080,
-                    enabled: true,
-                    description: None,
-                },
-            ],
+            gateways: vec![GatewayConfig {
+                address: "".to_string(),
+                port: 8080,
+                enabled: true,
+                description: None,
+            }],
             file_access: FileAccessConfig::default(),
             backend_settings: serde_json::Value::Null,
         };
@@ -368,9 +371,10 @@ mod tests {
                 allow_paths: Some(vec!["/tmp".to_string()]),
                 deny_paths: Some(vec!["/root".to_string()]),
             }),
-            settings: Some(HashMap::from([
-                ("debug".to_string(), serde_json::Value::Bool(true)),
-            ])),
+            settings: Some(HashMap::from([(
+                "debug".to_string(),
+                serde_json::Value::Bool(true),
+            )])),
         };
 
         let unified = migrator.migrate_legacy_config(legacy.clone()).unwrap();

@@ -145,7 +145,10 @@ impl EnforcementBackend for MockBackend {
         Ok(BackendHealth {
             status: self.health_status.read().unwrap().clone(),
             last_check: std::time::SystemTime::now(),
-            details: format!("Mock backend status: {:?}", *self.health_status.read().unwrap()),
+            details: format!(
+                "Mock backend status: {:?}",
+                *self.health_status.read().unwrap()
+            ),
         })
     }
 

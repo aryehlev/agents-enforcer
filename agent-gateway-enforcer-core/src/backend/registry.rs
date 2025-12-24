@@ -10,13 +10,13 @@ use std::sync::Arc;
 pub trait BackendFactory: Send + Sync {
     /// Create a new backend instance
     fn create(&self) -> Result<Arc<dyn EnforcementBackend>>;
-    
+
     /// Get the backend type this factory creates
     fn backend_type(&self) -> BackendType;
-    
+
     /// Get the platform this backend supports
     fn platform(&self) -> Platform;
-    
+
     /// Get the capabilities of backends created by this factory
     fn capabilities(&self) -> BackendCapabilities;
 }
@@ -55,12 +55,12 @@ impl BackendRegistry {
         let mut registry = Self {
             factories: HashMap::new(),
         };
-        
+
         // Register available backends based on compile-time platform
         registry.register_available_backends();
         registry
     }
-    
+
     /// Register a backend factory
     ///
     /// # Arguments
@@ -76,10 +76,14 @@ impl BackendRegistry {
     /// let mut registry = BackendRegistry::new();
     /// // registry.register_factory(BackendType::EbpfLinux, Box::new(MyFactory::new()));
     /// ```
-    pub fn register_factory(&mut self, backend_type: BackendType, factory: Box<dyn BackendFactory>) {
+    pub fn register_factory(
+        &mut self,
+        backend_type: BackendType,
+        factory: Box<dyn BackendFactory>,
+    ) {
         self.factories.insert(backend_type, factory);
     }
-    
+
     /// Get or create a backend instance by type
     ///
     /// # Arguments
@@ -101,18 +105,22 @@ impl BackendRegistry {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_backend(&self, backend_type: &BackendType) -> Result<Arc<dyn EnforcementBackend>> {
+    pub async fn get_backend(
+        &self,
+        backend_type: &BackendType,
+    ) -> Result<Arc<dyn EnforcementBackend>> {
         // Handle auto-detection
         if backend_type == &BackendType::Auto {
             return self.auto_detect_backend();
         }
-        
-        let factory = self.factories.get(backend_type)
-            .ok_or_else(|| anyhow::anyhow!("No factory registered for backend type: {:?}", backend_type))?;
-        
+
+        let factory = self.factories.get(backend_type).ok_or_else(|| {
+            anyhow::anyhow!("No factory registered for backend type: {:?}", backend_type)
+        })?;
+
         factory.create()
     }
-    
+
     /// Auto-detect and create a backend for the current platform
     ///
     /// This method detects the current platform and creates an appropriate
@@ -136,20 +144,20 @@ impl BackendRegistry {
     /// ```
     pub fn auto_detect_backend(&self) -> Result<Arc<dyn EnforcementBackend>> {
         let current_platform = Platform::current();
-        
+
         // Find a factory that supports the current platform
         for factory in self.factories.values() {
             if factory.platform() == current_platform {
                 return factory.create();
             }
         }
-        
+
         Err(anyhow::anyhow!(
             "No backend available for platform: {}",
             current_platform.name()
         ))
     }
-    
+
     /// List all available backends
     ///
     /// # Returns
@@ -175,7 +183,7 @@ impl BackendRegistry {
             })
             .collect()
     }
-    
+
     /// Register built-in backends based on the compile-time platform
     ///
     /// This method is called automatically by `new()` and registers the
@@ -184,7 +192,7 @@ impl BackendRegistry {
         // Note: Actual factory implementations will be provided by
         // platform-specific backend crates. For now, we just set up
         // the structure.
-        
+
         #[cfg(target_os = "linux")]
         {
             // EbpfLinux backend would be registered here
@@ -193,7 +201,7 @@ impl BackendRegistry {
             //     Box::new(backends::ebpf_linux::Factory::new())
             // );
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // MacOSDesktop backend would be registered here
@@ -202,7 +210,7 @@ impl BackendRegistry {
             //     Box::new(backends::macos_desktop::Factory::new())
             // );
         }
-        
+
         #[cfg(target_os = "windows")]
         {
             // WindowsDesktop backend would be registered here
@@ -212,7 +220,7 @@ impl BackendRegistry {
             // );
         }
     }
-    
+
     /// Check if a backend is registered
     ///
     /// # Arguments
@@ -225,7 +233,7 @@ impl BackendRegistry {
     pub fn has_backend(&self, backend_type: &BackendType) -> bool {
         self.factories.contains_key(backend_type)
     }
-    
+
     /// Get the number of registered backends
     pub fn backend_count(&self) -> usize {
         self.factories.len()
@@ -294,11 +302,17 @@ mod tests {
             Ok(())
         }
 
-        async fn configure_gateways(&self, _gateways: &[super::super::GatewayConfig]) -> Result<()> {
+        async fn configure_gateways(
+            &self,
+            _gateways: &[super::super::GatewayConfig],
+        ) -> Result<()> {
             Ok(())
         }
 
-        async fn configure_file_access(&self, _config: &super::super::FileAccessConfig) -> Result<()> {
+        async fn configure_file_access(
+            &self,
+            _config: &super::super::FileAccessConfig,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -381,13 +395,10 @@ mod tests {
     #[tokio::test]
     async fn test_registry_with_mock_backend() {
         let mut registry = BackendRegistry::new();
-        let factory = Box::new(MockFactory::new(
-            BackendType::EbpfLinux,
-            Platform::Linux,
-        ));
-        
+        let factory = Box::new(MockFactory::new(BackendType::EbpfLinux, Platform::Linux));
+
         registry.register_factory(BackendType::EbpfLinux, factory);
-        
+
         assert!(registry.has_backend(&BackendType::EbpfLinux));
         assert_eq!(registry.backend_count(), 1);
     }
@@ -395,13 +406,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_backend() {
         let mut registry = BackendRegistry::new();
-        let factory = Box::new(MockFactory::new(
-            BackendType::EbpfLinux,
-            Platform::Linux,
-        ));
-        
+        let factory = Box::new(MockFactory::new(BackendType::EbpfLinux, Platform::Linux));
+
         registry.register_factory(BackendType::EbpfLinux, factory);
-        
+
         let backend = registry.get_backend(&BackendType::EbpfLinux).await.unwrap();
         assert_eq!(backend.backend_type(), BackendType::EbpfLinux);
         assert_eq!(backend.platform(), Platform::Linux);
@@ -417,13 +425,10 @@ mod tests {
     #[test]
     fn test_list_available() {
         let mut registry = BackendRegistry::new();
-        let factory = Box::new(MockFactory::new(
-            BackendType::EbpfLinux,
-            Platform::Linux,
-        ));
-        
+        let factory = Box::new(MockFactory::new(BackendType::EbpfLinux, Platform::Linux));
+
         registry.register_factory(BackendType::EbpfLinux, factory);
-        
+
         let available = registry.list_available();
         assert_eq!(available.len(), 1);
         assert_eq!(available[0].backend_type, BackendType::EbpfLinux);
@@ -434,17 +439,17 @@ mod tests {
     async fn test_auto_detect_backend() {
         let mut registry = BackendRegistry::new();
         let current_platform = Platform::current();
-        
+
         let backend_type = match current_platform {
             Platform::Linux => BackendType::EbpfLinux,
             Platform::MacOS => BackendType::MacOSDesktop,
             Platform::Windows => BackendType::WindowsDesktop,
             Platform::Unknown => return, // Skip test on unknown platforms
         };
-        
+
         let factory = Box::new(MockFactory::new(backend_type.clone(), current_platform));
         registry.register_factory(backend_type, factory);
-        
+
         let backend = registry.auto_detect_backend().await.unwrap();
         assert_eq!(backend.platform(), current_platform);
     }

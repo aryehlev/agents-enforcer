@@ -166,7 +166,7 @@ impl Default for UnifiedConfig {
 pub trait MetricsCollector: Send + Sync {
     /// Get current metrics as JSON
     fn get_metrics(&self) -> Result<serde_json::Value>;
-    
+
     /// Reset metrics counters
     fn reset(&self) -> Result<()>;
 }
@@ -185,32 +185,32 @@ pub trait EventHandler: Send + Sync {
 pub trait EnforcementBackend: Send + Sync {
     /// Returns the backend type identifier
     fn backend_type(&self) -> BackendType;
-    
+
     /// Returns the platform this backend supports
     fn platform(&self) -> Platform;
-    
+
     /// Returns the backend's capabilities
     fn capabilities(&self) -> BackendCapabilities;
-    
+
     /// Initialize the backend with configuration
     ///
     /// This method should prepare the backend for operation but not
     /// start enforcement. It should validate the configuration and
     /// allocate necessary resources.
     fn initialize(&mut self, config: &UnifiedConfig) -> Result<()>;
-    
+
     /// Start enforcement operations
     ///
     /// After this method returns successfully, the backend should be
     /// actively enforcing policies.
     fn start(&mut self) -> Result<()>;
-    
+
     /// Stop enforcement operations gracefully
     ///
     /// This method should stop enforcement but not release resources.
     /// The backend should be able to be restarted without re-initialization.
     fn stop(&mut self) -> Result<()>;
-    
+
     /// Configure network gateway rules
     ///
     /// Update the list of allowed network gateways. This may be called
@@ -224,23 +224,23 @@ pub trait EnforcementBackend: Send + Sync {
     /// backend is running if hot-reload is supported.
     /// Implementations should use interior mutability (e.g., RwLock) for state changes.
     fn configure_file_access(&self, config: &FileAccessConfig) -> Result<()>;
-    
+
     /// Get the metrics collector if supported
     ///
     /// Returns `None` if the backend doesn't support metrics collection.
     fn metrics_collector(&self) -> Option<Arc<dyn MetricsCollector>>;
-    
+
     /// Get the event handler if supported
     ///
     /// Returns `None` if the backend doesn't support event streaming.
     fn event_handler(&self) -> Option<Arc<dyn EventHandler>>;
-    
+
     /// Perform a health check on backend
     ///
     /// This method should verify that the backend is functioning properly
     /// and return detailed health information.
     fn health_check(&self) -> Result<BackendHealth>;
-    
+
     /// Cleanup resources
     ///
     /// This method should release all resources held by the backend.
@@ -277,14 +277,20 @@ mod tests {
             HealthStatus::Unhealthy,
             HealthStatus::Unknown,
         ];
-        
+
         for status in statuses {
             let health = BackendHealth {
                 status,
                 last_check: SystemTime::now(),
                 details: "test".to_string(),
             };
-            assert!(matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy | HealthStatus::Unknown));
+            assert!(matches!(
+                health.status,
+                HealthStatus::Healthy
+                    | HealthStatus::Degraded
+                    | HealthStatus::Unhealthy
+                    | HealthStatus::Unknown
+            ));
         }
     }
 

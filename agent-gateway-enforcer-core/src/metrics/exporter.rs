@@ -1,13 +1,13 @@
 //! Metrics exporter for unified metrics system
 
-use crate::metrics::{UnifiedMetrics, MetricsSummary};
+use crate::metrics::{MetricsSummary, UnifiedMetrics};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use tracing::{debug, info, warn, error};
 
 /// Metrics exporter for exporting metrics to various destinations
 #[derive(Debug)]
@@ -111,7 +111,11 @@ pub enum HttpAuth {
     /// Basic authentication
     Basic { username: String, password: String },
     /// API key
-    ApiKey { key: String, value: String, header: Option<String> },
+    ApiKey {
+        key: String,
+        value: String,
+        header: Option<String>,
+    },
 }
 
 /// Retry policy
@@ -287,11 +291,16 @@ pub struct ExportDurationStats {
 #[async_trait::async_trait]
 pub trait MetricsExportDestination: std::fmt::Debug + Send + Sync {
     /// Export metrics to the destination
-    async fn export(&self, metrics: &str, format: ExportFormat, options: &ExportOptions) -> crate::Result<()>;
-    
+    async fn export(
+        &self,
+        metrics: &str,
+        format: ExportFormat,
+        options: &ExportOptions,
+    ) -> crate::Result<()>;
+
     /// Check if destination is healthy
     async fn health_check(&self) -> crate::Result<bool>;
-    
+
     /// Get destination name
     fn name(&self) -> &str;
 }
@@ -310,7 +319,8 @@ impl MetricsExporter {
     /// Add an export configuration
     pub async fn add_export_config(&self, config: ExportConfig) -> crate::Result<()> {
         // Create destination based on type
-        let destination: Box<dyn MetricsExportDestination + Send + Sync> = match &config.destination {
+        let destination: Box<dyn MetricsExportDestination + Send + Sync> = match &config.destination
+        {
             DestinationType::Http(http_config) => {
                 Box::new(HttpMetricsDestination::new(http_config.clone()))
             }
@@ -330,7 +340,9 @@ impl MetricsExporter {
                 Box::new(StatsDMetricsDestination::new(statsd_config.clone()))
             }
             DestinationType::Custom(_) => {
-                return Err(anyhow::anyhow!("Custom destinations not yet implemented".to_string()));
+                return Err(anyhow::anyhow!(
+                    "Custom destinations not yet implemented".to_string()
+                ));
             }
         };
 
@@ -386,7 +398,9 @@ impl MetricsExporter {
             if let Some(destination) = destinations.get(export_id) {
                 let export_start = std::time::Instant::now();
                 let metrics_str = serde_json::to_string(&metrics_data).unwrap_or_default();
-                let result = destination.export(&metrics_str, config.format.clone(), &config.options).await;
+                let result = destination
+                    .export(&metrics_str, config.format.clone(), &config.options)
+                    .await;
                 let result_copy = result.is_ok();
                 results.insert(export_id.clone(), result);
 
@@ -427,9 +441,9 @@ impl MetricsExporter {
     fn export_influxdb(&self, options: &ExportOptions) -> crate::Result<String> {
         let summary = self.metrics.get_summary();
         let timestamp = chrono::Utc::now().timestamp_nanos_opt();
-        
+
         let mut lines = Vec::new();
-        
+
         // Summary metrics
         let measurement = options.prefix.as_deref().unwrap_or("agent_gateway");
         lines.push(format!(
@@ -453,56 +467,42 @@ impl MetricsExporter {
         let summary = self.metrics.get_summary();
         let timestamp = chrono::Utc::now().timestamp();
         let prefix = options.prefix.as_deref().unwrap_or("agent_gateway");
-        
+
         let mut lines = Vec::new();
-        
+
         lines.push(format!(
             "{}.total_events {} {}",
-            prefix,
-            summary.total_events,
-            timestamp
+            prefix, summary.total_events, timestamp
         ));
-        
+
         lines.push(format!(
             "{}.network.network_blocked {} {}",
-            prefix,
-            summary.network_blocked,
-            timestamp
+            prefix, summary.network_blocked, timestamp
         ));
-        
+
         lines.push(format!(
             "{}.network.network_allowed {} {}",
-            prefix,
-            summary.network_allowed,
-            timestamp
+            prefix, summary.network_allowed, timestamp
         ));
-        
+
         lines.push(format!(
             "{}.file.file_blocked {} {}",
-            prefix,
-            summary.file_blocked,
-            timestamp
+            prefix, summary.file_blocked, timestamp
         ));
-        
+
         lines.push(format!(
             "{}.file.file_allowed {} {}",
-            prefix,
-            summary.file_allowed,
-            timestamp
+            prefix, summary.file_allowed, timestamp
         ));
-        
+
         lines.push(format!(
             "{}.security.security_events {} {}",
-            prefix,
-            summary.security_events,
-            timestamp
+            prefix, summary.security_events, timestamp
         ));
-        
+
         lines.push(format!(
             "{}.system.uptime_seconds {} {}",
-            prefix,
-            summary.uptime_seconds,
-            timestamp
+            prefix, summary.uptime_seconds, timestamp
         ));
 
         Ok(lines.join("\n"))
@@ -512,49 +512,42 @@ impl MetricsExporter {
     fn export_statsd(&self, options: &ExportOptions) -> crate::Result<String> {
         let summary = self.metrics.get_summary();
         let prefix = options.prefix.as_deref().unwrap_or("agent_gateway");
-        
+
         let mut lines = Vec::new();
-        
+
         lines.push(format!(
             "{}.total_events:{}|c",
-            prefix,
-            summary.total_events
+            prefix, summary.total_events
         ));
-        
+
         lines.push(format!(
             "{}.network.network_blocked:{}|c",
-            prefix,
-            summary.network_blocked
+            prefix, summary.network_blocked
         ));
-        
+
         lines.push(format!(
             "{}.network.network_allowed:{}|c",
-            prefix,
-            summary.network_allowed
+            prefix, summary.network_allowed
         ));
-        
+
         lines.push(format!(
             "{}.file.file_blocked:{}|c",
-            prefix,
-            summary.file_blocked
+            prefix, summary.file_blocked
         ));
-        
+
         lines.push(format!(
             "{}.file.file_allowed:{}|c",
-            prefix,
-            summary.file_allowed
+            prefix, summary.file_allowed
         ));
-        
+
         lines.push(format!(
             "{}.security.security_events:{}|c",
-            prefix,
-            summary.security_events
+            prefix, summary.security_events
         ));
-        
+
         lines.push(format!(
             "{}.system.uptime_seconds:{}|g",
-            prefix,
-            summary.uptime_seconds as u64
+            prefix, summary.uptime_seconds as u64
         ));
 
         Ok(lines.join("\n"))
@@ -580,8 +573,15 @@ impl HttpMetricsDestination {
 
 #[async_trait::async_trait]
 impl MetricsExportDestination for HttpMetricsDestination {
-    async fn export(&self, _metrics: &str, _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("HTTP metrics export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _metrics: &str,
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "HTTP metrics export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -606,8 +606,14 @@ impl FileMetricsDestination {
 
 #[async_trait::async_trait]
 impl MetricsExportDestination for FileMetricsDestination {
-    async fn export(&self, metrics: &str, _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        tokio::fs::write(&self.config.path, metrics).await
+    async fn export(
+        &self,
+        metrics: &str,
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        tokio::fs::write(&self.config.path, metrics)
+            .await
             .map_err(|e| anyhow::anyhow!(format!("Failed to write metrics to file: {}", e)))?;
         Ok(())
     }
@@ -642,8 +648,15 @@ impl PushgatewayMetricsDestination {
 
 #[async_trait::async_trait]
 impl MetricsExportDestination for PushgatewayMetricsDestination {
-    async fn export(&self, _metrics: &str, _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Pushgateway metrics export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _metrics: &str,
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Pushgateway metrics export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -668,8 +681,15 @@ impl InfluxDBMetricsDestination {
 
 #[async_trait::async_trait]
 impl MetricsExportDestination for InfluxDBMetricsDestination {
-    async fn export(&self, _metrics: &str, _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("InfluxDB metrics export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _metrics: &str,
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "InfluxDB metrics export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -694,8 +714,15 @@ impl GraphiteMetricsDestination {
 
 #[async_trait::async_trait]
 impl MetricsExportDestination for GraphiteMetricsDestination {
-    async fn export(&self, _metrics: &str, _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Graphite metrics export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _metrics: &str,
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "Graphite metrics export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -720,8 +747,15 @@ impl StatsDMetricsDestination {
 
 #[async_trait::async_trait]
 impl MetricsExportDestination for StatsDMetricsDestination {
-    async fn export(&self, _metrics: &str, _format: ExportFormat, _options: &ExportOptions) -> crate::Result<()> {
-        Err(anyhow::anyhow!("StatsD metrics export not yet implemented".to_string()))
+    async fn export(
+        &self,
+        _metrics: &str,
+        _format: ExportFormat,
+        _options: &ExportOptions,
+    ) -> crate::Result<()> {
+        Err(anyhow::anyhow!(
+            "StatsD metrics export not yet implemented".to_string()
+        ))
     }
 
     async fn health_check(&self) -> crate::Result<bool> {
@@ -742,7 +776,7 @@ mod tests {
     async fn test_metrics_exporter_creation() {
         let metrics = Arc::new(UnifiedMetrics::new().unwrap());
         let exporter = MetricsExporter::new(metrics);
-        
+
         let stats = exporter.stats().await;
         assert_eq!(stats.total_exports, 0);
         assert_eq!(stats.successful_exports, 0);

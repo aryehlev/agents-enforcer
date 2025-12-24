@@ -10,13 +10,12 @@
 #![warn(missing_docs)]
 
 use agent_gateway_enforcer_core::backend::{
-    EnforcementBackend, BackendCapabilities, BackendHealth, BackendType,
-    FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector,
-    EventHandler, Platform, Result, UnifiedConfig
+    BackendCapabilities, BackendHealth, BackendType, EnforcementBackend, EventHandler,
+    FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector, Platform, Result,
+    UnifiedConfig,
 };
 use agent_gateway_enforcer_core::events::{
-    UnifiedEvent, EventSource, NetworkAction, NetworkProtocol,
-    FileAction, FileAccessType
+    EventSource, FileAccessType, FileAction, NetworkAction, NetworkProtocol, UnifiedEvent,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, RwLock};
@@ -25,13 +24,15 @@ use tokio::sync::mpsc;
 
 // Linux-specific imports for eBPF
 #[cfg(target_os = "linux")]
-use aya::{Bpf, maps::{Map, MapData, HashMap as BpfHashMap}};
+use aya::{
+    maps::{HashMap as BpfHashMap, Map, MapData},
+    Bpf,
+};
 
 #[cfg(target_os = "linux")]
 use agent_gateway_enforcer_common::{
-    GatewayKey, BlockedEvent, FileBlockedEvent, PathKey, PathRule,
-    FILE_PERM_READ, FILE_PERM_WRITE, FILE_PERM_EXEC, FILE_PERM_DELETE,
-    IPPROTO_TCP, IPPROTO_UDP
+    BlockedEvent, FileBlockedEvent, GatewayKey, PathKey, PathRule, FILE_PERM_DELETE,
+    FILE_PERM_EXEC, FILE_PERM_READ, FILE_PERM_WRITE, IPPROTO_TCP, IPPROTO_UDP,
 };
 
 /// Linux eBPF backend implementation
@@ -117,19 +118,23 @@ impl EbpfMetrics {
     }
 
     fn increment_network_blocked(&self) {
-        self.network_blocked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.network_blocked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn increment_network_allowed(&self) {
-        self.network_allowed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.network_allowed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn increment_file_blocked(&self) {
-        self.file_blocked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.file_blocked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn increment_file_allowed(&self) {
-        self.file_allowed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.file_allowed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn emit_event(&self, event_json: serde_json::Value) {
@@ -158,17 +163,23 @@ impl MetricsCollector for EbpfMetrics {
     }
 
     fn reset(&self) -> Result<()> {
-        self.network_blocked.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.network_allowed.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.file_blocked.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.file_allowed.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.network_blocked
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.network_allowed
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.file_blocked
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.file_allowed
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 }
 
 impl EventHandler for EbpfMetrics {
     fn on_event(&self, callback: Box<dyn Fn(serde_json::Value) + Send + Sync>) -> Result<()> {
-        let mut callbacks = self.event_callbacks.lock()
+        let mut callbacks = self
+            .event_callbacks
+            .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire event callbacks lock: {}", e))?;
         callbacks.push(callback);
         Ok(())
@@ -198,9 +209,11 @@ impl EbpfLinuxBackend {
     fn validate_kernel_support(&self) -> Result<()> {
         use nix::sys::utsname::uname;
 
-        let uname_info = uname()
-            .map_err(|e| anyhow::anyhow!("Failed to get kernel info: {}", e))?;
-        let release = uname_info.release().to_str()
+        let uname_info =
+            uname().map_err(|e| anyhow::anyhow!("Failed to get kernel info: {}", e))?;
+        let release = uname_info
+            .release()
+            .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid kernel release string"))?;
 
         // Parse kernel version (major.minor.patch)
@@ -211,7 +224,10 @@ impl EbpfLinuxBackend {
             .collect();
 
         if version_parts.len() < 2 {
-            return Err(anyhow::anyhow!("Unable to parse kernel version: {}", release));
+            return Err(anyhow::anyhow!(
+                "Unable to parse kernel version: {}",
+                release
+            ));
         }
 
         let major = version_parts[0];
@@ -221,10 +237,15 @@ impl EbpfLinuxBackend {
         if major < 5 || (major == 5 && minor < 8) {
             tracing::warn!(
                 "Kernel version {}.{} may not support all eBPF features (5.8+ recommended)",
-                major, minor
+                major,
+                minor
             );
         } else {
-            tracing::info!("Kernel version {}.{} detected - full eBPF support available", major, minor);
+            tracing::info!(
+                "Kernel version {}.{} detected - full eBPF support available",
+                major,
+                minor
+            );
         }
 
         Ok(())
@@ -345,13 +366,8 @@ impl EbpfLinuxBackend {
         }
 
         // Create unified event
-        let event = UnifiedEvent::file_access(
-            action,
-            path,
-            access_type,
-            pid,
-            EventSource::EbpfLinux,
-        );
+        let event =
+            UnifiedEvent::file_access(action, path, access_type, pid, EventSource::EbpfLinux);
 
         // Emit to event handlers
         if let Ok(event_json) = serde_json::to_value(&event) {
@@ -381,7 +397,9 @@ impl EbpfLinuxBackend {
 
     /// Set backend state
     fn set_state(&self, new_state: BackendState) -> Result<()> {
-        let mut state = self.state.write()
+        let mut state = self
+            .state
+            .write()
             .map_err(|e| anyhow::anyhow!("Failed to acquire state lock: {}", e))?;
         *state = new_state;
         Ok(())
@@ -389,7 +407,9 @@ impl EbpfLinuxBackend {
 
     /// Get current backend state
     fn get_state(&self) -> Result<BackendState> {
-        let state = self.state.read()
+        let state = self
+            .state
+            .read()
             .map_err(|e| anyhow::anyhow!("Failed to acquire state lock: {}", e))?;
         Ok(*state)
     }
@@ -443,7 +463,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
 
         // Store configuration
         {
-            let mut cfg = self.config.write()
+            let mut cfg = self
+                .config
+                .write()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire config lock: {}", e))?;
             *cfg = config.clone();
         }
@@ -451,7 +473,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
         // Set up event streaming
         let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<UnifiedEvent>();
         {
-            let mut sender_guard = self.event_sender.lock()
+            let mut sender_guard = self
+                .event_sender
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire sender lock: {}", e))?;
             *sender_guard = Some(event_sender);
         }
@@ -467,7 +491,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
         });
 
         {
-            let mut task_guard = self.event_task.lock()
+            let mut task_guard = self
+                .event_task
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire task lock: {}", e))?;
             *task_guard = Some(task);
         }
@@ -509,7 +535,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
         // Detach eBPF programs (Linux only)
         #[cfg(target_os = "linux")]
         {
-            let mut ebpf_state = self.ebpf_state.lock()
+            let mut ebpf_state = self
+                .ebpf_state
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
 
             // Unload network program
@@ -542,7 +570,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
 
         // Update configuration
         {
-            let mut config = self.config.write()
+            let mut config = self
+                .config
+                .write()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire config lock: {}", e))?;
             config.gateways = gateways.to_vec();
         }
@@ -570,7 +600,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
 
         // Update configuration
         {
-            let mut cfg = self.config.write()
+            let mut cfg = self
+                .config
+                .write()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire config lock: {}", e))?;
             cfg.file_access = config.clone();
         }
@@ -605,36 +637,48 @@ impl EnforcementBackend for EbpfLinuxBackend {
                 #[cfg(target_os = "linux")]
                 {
                     // On Linux, verify eBPF programs are loaded
-                    let ebpf_state = self.ebpf_state.lock()
+                    let ebpf_state = self
+                        .ebpf_state
+                        .lock()
                         .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
 
-                    let has_programs = ebpf_state.network_program.is_some()
-                        || ebpf_state.lsm_program.is_some();
+                    let has_programs =
+                        ebpf_state.network_program.is_some() || ebpf_state.lsm_program.is_some();
 
                     if has_programs {
-                        (HealthStatus::Healthy, "Backend is running and enforcing policies".to_string())
+                        (
+                            HealthStatus::Healthy,
+                            "Backend is running and enforcing policies".to_string(),
+                        )
                     } else {
-                        (HealthStatus::Degraded, "Backend is running but eBPF programs not loaded".to_string())
+                        (
+                            HealthStatus::Degraded,
+                            "Backend is running but eBPF programs not loaded".to_string(),
+                        )
                     }
                 }
 
                 #[cfg(not(target_os = "linux"))]
                 {
-                    (HealthStatus::Degraded, "Backend is running in stub mode (non-Linux platform)".to_string())
+                    (
+                        HealthStatus::Degraded,
+                        "Backend is running in stub mode (non-Linux platform)".to_string(),
+                    )
                 }
             }
-            BackendState::Initialized => {
-                (HealthStatus::Degraded, "Backend is initialized but not started".to_string())
-            }
-            BackendState::Stopped => {
-                (HealthStatus::Degraded, "Backend is stopped".to_string())
-            }
-            BackendState::NotInitialized => {
-                (HealthStatus::Unhealthy, "Backend is not initialized".to_string())
-            }
-            BackendState::Error => {
-                (HealthStatus::Unhealthy, "Backend is in error state".to_string())
-            }
+            BackendState::Initialized => (
+                HealthStatus::Degraded,
+                "Backend is initialized but not started".to_string(),
+            ),
+            BackendState::Stopped => (HealthStatus::Degraded, "Backend is stopped".to_string()),
+            BackendState::NotInitialized => (
+                HealthStatus::Unhealthy,
+                "Backend is not initialized".to_string(),
+            ),
+            BackendState::Error => (
+                HealthStatus::Unhealthy,
+                "Backend is in error state".to_string(),
+            ),
         };
 
         Ok(BackendHealth {
@@ -656,7 +700,9 @@ impl EnforcementBackend for EbpfLinuxBackend {
         // Clean up eBPF programs (Linux only)
         #[cfg(target_os = "linux")]
         {
-            let mut ebpf_state = self.ebpf_state.lock()
+            let mut ebpf_state = self
+                .ebpf_state
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
             ebpf_state.network_program = None;
             ebpf_state.lsm_program = None;
@@ -664,13 +710,17 @@ impl EnforcementBackend for EbpfLinuxBackend {
 
         // Clean up event processing
         {
-            let mut sender_guard = self.event_sender.lock()
+            let mut sender_guard = self
+                .event_sender
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire sender lock: {}", e))?;
             *sender_guard = None;
         }
 
         {
-            let mut task_guard = self.event_task.lock()
+            let mut task_guard = self
+                .event_task
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire task lock: {}", e))?;
             if let Some(task) = task_guard.take() {
                 task.abort();
@@ -685,8 +735,8 @@ impl EnforcementBackend for EbpfLinuxBackend {
 }
 
 // Public modules
-pub mod registry;
 pub mod migration;
+pub mod registry;
 
 #[cfg(test)]
 mod tests {
@@ -712,7 +762,9 @@ mod tests {
         let backend = EbpfLinuxBackend::new();
 
         // Get metrics collector
-        let metrics = backend.metrics_collector().expect("Should have metrics collector");
+        let metrics = backend
+            .metrics_collector()
+            .expect("Should have metrics collector");
 
         // Get initial metrics
         let initial = metrics.get_metrics().expect("Should get metrics");
@@ -738,9 +790,11 @@ mod tests {
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let called_clone = called.clone();
 
-        handler.on_event(Box::new(move |_event| {
-            called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
-        })).expect("Should register callback");
+        handler
+            .on_event(Box::new(move |_event| {
+                called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+            }))
+            .expect("Should register callback");
 
         // Emit test event
         backend.emit_network_event(
@@ -776,7 +830,10 @@ mod tests {
 
         // Health check
         let health = backend.health_check().expect("Should check health");
-        assert!(matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded));
+        assert!(matches!(
+            health.status,
+            HealthStatus::Healthy | HealthStatus::Degraded
+        ));
 
         // Stop
         backend.stop().expect("Should stop");
@@ -790,7 +847,9 @@ mod tests {
     #[test]
     fn test_gateway_configuration() {
         let mut backend = EbpfLinuxBackend::new();
-        backend.initialize(&UnifiedConfig::default()).expect("Should initialize");
+        backend
+            .initialize(&UnifiedConfig::default())
+            .expect("Should initialize");
 
         let gateways = vec![
             GatewayConfig {
@@ -807,7 +866,9 @@ mod tests {
             },
         ];
 
-        backend.configure_gateways(&gateways).expect("Should configure gateways");
+        backend
+            .configure_gateways(&gateways)
+            .expect("Should configure gateways");
 
         // Verify configuration was stored
         let config = backend.config.read().unwrap();
@@ -819,7 +880,9 @@ mod tests {
     #[test]
     fn test_file_access_configuration() {
         let mut backend = EbpfLinuxBackend::new();
-        backend.initialize(&UnifiedConfig::default()).expect("Should initialize");
+        backend
+            .initialize(&UnifiedConfig::default())
+            .expect("Should initialize");
 
         let file_config = FileAccessConfig {
             allowed_paths: vec!["/tmp".to_string(), "/var/log".to_string()],
@@ -827,7 +890,9 @@ mod tests {
             default_deny: true,
         };
 
-        backend.configure_file_access(&file_config).expect("Should configure file access");
+        backend
+            .configure_file_access(&file_config)
+            .expect("Should configure file access");
 
         // Verify configuration was stored
         let config = backend.config.read().unwrap();

@@ -1,12 +1,12 @@
 //! Metrics registry for unified metrics system
 
-use crate::metrics::{UnifiedMetrics, MetricsSummary};
+use crate::metrics::{MetricsSummary, UnifiedMetrics};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use tracing::{debug, info, warn, error};
 
 /// Metrics registry for managing multiple metrics instances
 #[derive(Debug)]
@@ -41,7 +41,7 @@ impl Default for RegistryConfig {
         Self {
             max_instances: 100,
             default_retention: std::time::Duration::from_secs(24 * 60 * 60), // 24 hours
-            cleanup_interval: std::time::Duration::from_secs(5 * 60), // 5 minutes
+            cleanup_interval: std::time::Duration::from_secs(5 * 60),        // 5 minutes
             enable_aggregation: true,
             enable_caching: true,
         }
@@ -151,9 +151,7 @@ impl MetricsRegistry {
 
             // Check if instance already exists
             if instances.contains_key(&instance_id) {
-                return Err(anyhow::anyhow!(
-                    "Metrics instance already exists"
-                ));
+                return Err(anyhow::anyhow!("Metrics instance already exists"));
             }
         }
 
@@ -207,7 +205,10 @@ impl MetricsRegistry {
     }
 
     /// Get a metrics instance by ID
-    pub async fn get_metrics(&self, instance_id: &str) -> crate::Result<Option<Arc<UnifiedMetrics>>> {
+    pub async fn get_metrics(
+        &self,
+        instance_id: &str,
+    ) -> crate::Result<Option<Arc<UnifiedMetrics>>> {
         // Update lookup statistics
         {
             let mut stats = self.stats.write().await;
@@ -215,7 +216,7 @@ impl MetricsRegistry {
         }
 
         let mut instances = self.metrics_instances.write().await;
-        
+
         if let Some(registered_metrics) = instances.get_mut(instance_id) {
             // Update access information
             registered_metrics.last_accessed = chrono::Utc::now();
@@ -259,7 +260,7 @@ impl MetricsRegistry {
     /// Get aggregated metrics summary
     pub async fn get_aggregated_summary(&self) -> crate::Result<AggregatedSummary> {
         let instances = self.metrics_instances.read().await;
-        
+
         let mut total_events = 0u64;
         let mut network_blocked = 0u64;
         let mut network_allowed = 0u64;
@@ -311,12 +312,14 @@ impl MetricsRegistry {
 
         {
             let instances = self.metrics_instances.read().await;
-            
+
             for (instance_id, registered_metrics) in instances.iter() {
                 // Remove temporary instances that haven't been accessed recently
                 if registered_metrics.metadata.instance_type == MetricsInstanceType::Temporary {
                     let time_since_last_access = now - registered_metrics.last_accessed;
-                    if time_since_last_access > chrono::Duration::from_std(self.config.default_retention).unwrap() {
+                    if time_since_last_access
+                        > chrono::Duration::from_std(self.config.default_retention).unwrap()
+                    {
                         instances_to_remove.push(instance_id.clone());
                     }
                 }
@@ -351,10 +354,10 @@ impl MetricsRegistry {
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(cleanup_interval);
-            
+
             loop {
                 interval.tick().await;
-                
+
                 if let Err(e) = registry.cleanup().await {
                     error!("Metrics registry cleanup failed: {}", e);
                 }
@@ -372,7 +375,7 @@ impl MetricsRegistry {
 
         for (instance_id, registered_metrics) in instances.iter() {
             let mut matches_all = true;
-            
+
             for (tag_key, tag_value) in tags.iter() {
                 if let Some(instance_value) = registered_metrics.metadata.tags.get(tag_key) {
                     if instance_value != tag_value {
@@ -384,7 +387,7 @@ impl MetricsRegistry {
                     break;
                 }
             }
-            
+
             if matches_all {
                 matching_instances.push(instance_id.clone());
             }
@@ -415,7 +418,7 @@ impl MetricsRegistry {
         for (instance_id, registered_metrics) in instances.iter() {
             let now = chrono::Utc::now();
             let time_since_last_access = now - registered_metrics.last_accessed;
-            
+
             let health = InstanceHealth {
                 instance_id: instance_id.clone(),
                 name: registered_metrics.metadata.name.clone(),
@@ -431,7 +434,7 @@ impl MetricsRegistry {
                 last_accessed: registered_metrics.last_accessed,
                 access_count: registered_metrics.access_count,
             };
-            
+
             health_info.push(health);
         }
 
@@ -509,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_registry_creation() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let stats = registry.stats().await;
         assert_eq!(stats.total_instances, 0);
         assert_eq!(stats.total_registrations, 0);
@@ -519,7 +522,7 @@ mod tests {
     #[tokio::test]
     async fn test_register_metrics() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let metadata = MetricsMetadata {
             name: "test_metrics".to_string(),
             description: Some("Test metrics instance".to_string()),
@@ -529,7 +532,10 @@ mod tests {
             backend: None,
         };
 
-        let metrics = registry.register_metrics("test".to_string(), metadata).await.unwrap();
+        let metrics = registry
+            .register_metrics("test".to_string(), metadata)
+            .await
+            .unwrap();
         assert!(metrics.get_summary().total_events == 0);
 
         let stats = registry.stats().await;
@@ -540,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_metrics() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let metadata = MetricsMetadata {
             name: "test_metrics".to_string(),
             description: None,
@@ -550,8 +556,11 @@ mod tests {
             backend: None,
         };
 
-        registry.register_metrics("test".to_string(), metadata).await.unwrap();
-        
+        registry
+            .register_metrics("test".to_string(), metadata)
+            .await
+            .unwrap();
+
         let retrieved_metrics = registry.get_metrics("test").await.unwrap();
         assert!(retrieved_metrics.is_some());
 
@@ -564,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_metrics() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let metadata = MetricsMetadata {
             name: "test_metrics".to_string(),
             description: None,
@@ -574,8 +583,11 @@ mod tests {
             backend: None,
         };
 
-        registry.register_metrics("test".to_string(), metadata).await.unwrap();
-        
+        registry
+            .register_metrics("test".to_string(), metadata)
+            .await
+            .unwrap();
+
         let removed = registry.unregister_metrics("test").await.unwrap();
         assert!(removed);
 
@@ -587,7 +599,7 @@ mod tests {
     #[tokio::test]
     async fn test_find_by_tags() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let metadata1 = MetricsMetadata {
             name: "test1".to_string(),
             description: None,
@@ -606,10 +618,18 @@ mod tests {
             backend: None,
         };
 
-        registry.register_metrics("test1".to_string(), metadata1).await.unwrap();
-        registry.register_metrics("test2".to_string(), metadata2).await.unwrap();
-        
-        let test_instances = registry.find_by_tags(&HashMap::from([("env".to_string(), "test".to_string())])).await;
+        registry
+            .register_metrics("test1".to_string(), metadata1)
+            .await
+            .unwrap();
+        registry
+            .register_metrics("test2".to_string(), metadata2)
+            .await
+            .unwrap();
+
+        let test_instances = registry
+            .find_by_tags(&HashMap::from([("env".to_string(), "test".to_string())]))
+            .await;
         assert_eq!(test_instances.len(), 1);
         assert!(test_instances.contains(&"test1".to_string()));
     }
@@ -617,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn test_aggregated_summary() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let metadata = MetricsMetadata {
             name: "test".to_string(),
             description: None,
@@ -627,8 +647,11 @@ mod tests {
             backend: None,
         };
 
-        registry.register_metrics("test".to_string(), metadata).await.unwrap();
-        
+        registry
+            .register_metrics("test".to_string(), metadata)
+            .await
+            .unwrap();
+
         let summary = registry.get_aggregated_summary().await.unwrap();
         assert_eq!(summary.instance_count, 1);
         assert_eq!(summary.total_events, 0);
@@ -637,7 +660,7 @@ mod tests {
     #[tokio::test]
     async fn test_global_metrics() {
         let registry = MetricsRegistry::new_default().unwrap();
-        
+
         let global_metrics = registry.global_metrics();
         let summary = global_metrics.get_summary();
         assert_eq!(summary.total_events, 0);

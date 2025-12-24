@@ -1,11 +1,11 @@
 //! Event aggregation for filtering, correlation, and analysis
 
-use crate::events::{UnifiedEvent, EventType, EventSource, EventSeverity};
+use crate::events::{EventSeverity, EventSource, EventType, UnifiedEvent};
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc, Duration};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Event aggregator for filtering, correlation, and analysis
@@ -341,18 +341,12 @@ impl EventAggregator {
             EventFilterSpec::EventType(types) => types.contains(&event.event_type),
             EventFilterSpec::EventSource(sources) => sources.contains(&event.source),
             EventFilterSpec::EventSeverity(severities) => severities.contains(&event.severity),
-            EventFilterSpec::Tag(key, value) => {
-                event.metadata.tags.get(key) == Some(value)
-            }
+            EventFilterSpec::Tag(key, value) => event.metadata.tags.get(key) == Some(value),
             EventFilterSpec::CustomField(key, expected_value) => {
                 event.metadata.custom_fields.get(key) == Some(expected_value)
             }
-            EventFilterSpec::And(filters) => {
-                filters.iter().all(|f| self.matches_filter(event, f))
-            }
-            EventFilterSpec::Or(filters) => {
-                filters.iter().any(|f| self.matches_filter(event, f))
-            }
+            EventFilterSpec::And(filters) => filters.iter().all(|f| self.matches_filter(event, f)),
+            EventFilterSpec::Or(filters) => filters.iter().any(|f| self.matches_filter(event, f)),
             EventFilterSpec::All => true,
         }
     }
@@ -366,14 +360,16 @@ impl EventAggregator {
         // Get or create event window
         let window_id = self.get_window_id(event, rule);
         let mut windows = self.windows.write().await;
-        
-        let window = windows.entry(window_id.clone()).or_insert_with(|| EventWindow {
-            id: window_id,
-            events: VecDeque::new(),
-            start_time: event.timestamp,
-            duration: rule.time_window,
-            max_events: self.config.max_events_per_window,
-        });
+
+        let window = windows
+            .entry(window_id.clone())
+            .or_insert_with(|| EventWindow {
+                id: window_id,
+                events: VecDeque::new(),
+                start_time: event.timestamp,
+                duration: rule.time_window,
+                max_events: self.config.max_events_per_window,
+            });
 
         // Add event to window
         window.events.push_back(event.clone());
@@ -397,7 +393,7 @@ impl EventAggregator {
         if should_aggregate {
             // Perform aggregation
             let aggregated_value = self.perform_aggregation(&window.events, rule.aggregation_type);
-            
+
             let aggregated_event = AggregatedEvent {
                 id: Uuid::new_v4(),
                 original_event_ids: window.events.iter().map(|e| e.id).collect(),
@@ -427,7 +423,11 @@ impl EventAggregator {
     }
 
     /// Perform aggregation on events
-    fn perform_aggregation(&self, events: &VecDeque<UnifiedEvent>, aggregation_type: AggregationType) -> AggregatedValue {
+    fn perform_aggregation(
+        &self,
+        events: &VecDeque<UnifiedEvent>,
+        aggregation_type: AggregationType,
+    ) -> AggregatedValue {
         if events.is_empty() {
             return AggregatedValue::Count(0);
         }
@@ -438,22 +438,41 @@ impl EventAggregator {
                 // Return the first event as a serialized object
                 let first_event = &events[0];
                 let mut obj = HashMap::new();
-                obj.insert("id".to_string(), AggregatedValue::String(first_event.id.to_string()));
-                obj.insert("type".to_string(), AggregatedValue::String(format!("{:?}", first_event.event_type)));
-                obj.insert("timestamp".to_string(), AggregatedValue::String(first_event.timestamp.to_rfc3339()));
+                obj.insert(
+                    "id".to_string(),
+                    AggregatedValue::String(first_event.id.to_string()),
+                );
+                obj.insert(
+                    "type".to_string(),
+                    AggregatedValue::String(format!("{:?}", first_event.event_type)),
+                );
+                obj.insert(
+                    "timestamp".to_string(),
+                    AggregatedValue::String(first_event.timestamp.to_rfc3339()),
+                );
                 AggregatedValue::Object(obj)
             }
             AggregationType::Last => {
                 // Return the last event as a serialized object
                 let last_event = &events[events.len() - 1];
                 let mut obj = HashMap::new();
-                obj.insert("id".to_string(), AggregatedValue::String(last_event.id.to_string()));
-                obj.insert("type".to_string(), AggregatedValue::String(format!("{:?}", last_event.event_type)));
-                obj.insert("timestamp".to_string(), AggregatedValue::String(last_event.timestamp.to_rfc3339()));
+                obj.insert(
+                    "id".to_string(),
+                    AggregatedValue::String(last_event.id.to_string()),
+                );
+                obj.insert(
+                    "type".to_string(),
+                    AggregatedValue::String(format!("{:?}", last_event.event_type)),
+                );
+                obj.insert(
+                    "timestamp".to_string(),
+                    AggregatedValue::String(last_event.timestamp.to_rfc3339()),
+                );
                 AggregatedValue::Object(obj)
             }
             AggregationType::UniqueCount => {
-                let unique_ids: std::collections::HashSet<_> = events.iter().map(|e| e.id).collect();
+                let unique_ids: std::collections::HashSet<_> =
+                    events.iter().map(|e| e.id).collect();
                 AggregatedValue::Count(unique_ids.len() as u64)
             }
             // For numeric aggregations, we'd need to extract numeric values from events
@@ -530,7 +549,7 @@ impl EventAggregator {
     /// Update event index for correlation
     async fn update_event_index(&self, event: &UnifiedEvent) {
         let mut correlation = self.correlation.write().await;
-        
+
         // Index by process ID
         if let Some(pid) = self.extract_pid(event) {
             correlation
@@ -579,15 +598,15 @@ impl EventAggregator {
     /// Perform correlation analysis
     async fn perform_correlation(&self, event: &UnifiedEvent) -> crate::Result<()> {
         let correlation = self.correlation.read().await;
-        
+
         for rule in &correlation.rules {
             // Find related events based on criteria
             let related_events = self.find_related_events(event, rule).await?;
-            
+
             if related_events.len() > 1 {
                 // Calculate correlation score
                 let score = self.calculate_correlation_score(event, &related_events, rule);
-                
+
                 if score >= rule.min_score {
                     // Create correlation result
                     let correlation_result = CorrelationResult {
@@ -597,7 +616,7 @@ impl EventAggregator {
                         correlation_type: rule.name.clone(),
                         timestamp: Utc::now(),
                     };
-                    
+
                     // Store correlation result (in a real implementation, this would be stored or emitted)
                     tracing::info!(
                         "Found correlation: {} events with score {}",
@@ -618,11 +637,11 @@ impl EventAggregator {
         rule: &CorrelationRule,
     ) -> crate::Result<Vec<UnifiedEvent>> {
         let mut related_events = vec![event.clone()];
-        
+
         // This is a simplified implementation
         // In a real implementation, we would query the event store or index
         // For now, we'll just return the current event
-        
+
         Ok(related_events)
     }
 
@@ -647,7 +666,7 @@ impl EventAggregator {
                     .map(|e| e.timestamp)
                     .min()
                     .unwrap_or(event.timestamp);
-            
+
             if time_span < rule.time_window {
                 1.0
             } else {
@@ -664,7 +683,7 @@ impl EventAggregator {
     pub async fn get_aggregated_events(&self, limit: Option<usize>) -> Vec<AggregatedEvent> {
         let aggregated = self.aggregated_events.read().await;
         let events: Vec<_> = aggregated.iter().rev().cloned().collect();
-        
+
         if let Some(limit) = limit {
             events.into_iter().take(limit).collect()
         } else {
@@ -696,18 +715,16 @@ impl EventAggregator {
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(cleanup_interval.to_std().unwrap());
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let now = Utc::now();
-                
+
                 // Clean up old windows
                 {
                     let mut windows_mut = windows.write().await;
-                    windows_mut.retain(|_, window| {
-                        now - window.start_time < window.duration * 2
-                    });
+                    windows_mut.retain(|_, window| now - window.start_time < window.duration * 2);
                 }
 
                 // Clean up old aggregated events if needed
@@ -741,7 +758,7 @@ pub struct AggregatorStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{SystemAction, EventSource};
+    use crate::events::{EventSource, SystemAction};
 
     #[tokio::test]
     async fn test_event_aggregator_basic() {
@@ -815,7 +832,7 @@ mod tests {
     #[tokio::test]
     async fn test_aggregator_stats() {
         let aggregator = EventAggregator::default();
-        
+
         let stats = aggregator.stats().await;
         assert_eq!(stats.rules_count, 0);
         assert_eq!(stats.active_windows, 0);

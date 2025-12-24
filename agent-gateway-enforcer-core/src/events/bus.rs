@@ -1,6 +1,6 @@
 //! Event bus for unified event distribution
 
-use crate::events::{UnifiedEvent, EventFilter, EventHandler};
+use crate::events::{EventFilter, EventHandler, UnifiedEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -76,7 +76,7 @@ impl EventBus {
     /// Create a new event bus
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        
+
         Self {
             sender,
             handlers: Arc::new(RwLock::new(HashMap::new())),
@@ -180,7 +180,11 @@ impl EventBus {
             stats.handlers_active = stats.handlers_registered;
         }
 
-        tracing::info!("Registered event handler '{}' with ID {}", name_clone, handler_id);
+        tracing::info!(
+            "Registered event handler '{}' with ID {}",
+            name_clone,
+            handler_id
+        );
         handler_id
     }
 
@@ -212,10 +216,7 @@ impl EventBus {
     /// Get list of registered handlers
     pub async fn list_handlers(&self) -> Vec<String> {
         let handlers = self.handlers.read().await;
-        handlers
-            .values()
-            .map(|info| info.name.clone())
-            .collect()
+        handlers.values().map(|info| info.name.clone()).collect()
     }
 
     /// Get a streamer for this event bus
@@ -273,7 +274,11 @@ impl EventBusHandle {
             stats.handlers_active = stats.handlers_registered;
         }
 
-        tracing::info!("Registered event handler '{}' with ID {}", name_clone, handler_id);
+        tracing::info!(
+            "Registered event handler '{}' with ID {}",
+            name_clone,
+            handler_id
+        );
         handler_id
     }
 
@@ -305,10 +310,7 @@ impl EventBusHandle {
     /// Get list of registered handlers
     pub async fn list_handlers(&self) -> Vec<String> {
         let handlers = self.handlers.read().await;
-        handlers
-            .values()
-            .map(|info| info.name.clone())
-            .collect()
+        handlers.values().map(|info| info.name.clone()).collect()
     }
 
     /// Subscribe to events directly
@@ -320,10 +322,6 @@ impl EventBusHandle {
     pub async fn streamer(&self) -> broadcast::Receiver<UnifiedEvent> {
         self.subscribe()
     }
-
-
-
-
 }
 
 #[cfg(test)]
@@ -371,7 +369,9 @@ mod tests {
         });
 
         // Register the handler
-        let handler_id = handle.register_handler(handler.clone(), None, "test".to_string()).await;
+        let handler_id = handle
+            .register_handler(handler.clone(), None, "test".to_string())
+            .await;
 
         // Publish an event
         let event = UnifiedEvent::system(
@@ -414,7 +414,9 @@ mod tests {
         });
 
         // Register the handler with filter
-        handle.register_handler(handler.clone(), Some(filter), "test".to_string()).await;
+        handle
+            .register_handler(handler.clone(), Some(filter), "test".to_string())
+            .await;
 
         // Publish events from different sources
         let core_event = UnifiedEvent::system(

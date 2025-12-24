@@ -35,7 +35,7 @@ impl Platform {
             _ => Platform::Unknown,
         }
     }
-    
+
     /// Check if the platform is supported
     ///
     /// # Examples
@@ -51,7 +51,7 @@ impl Platform {
     pub fn is_supported(&self) -> bool {
         matches!(self, Platform::Linux | Platform::MacOS | Platform::Windows)
     }
-    
+
     /// Get the human-readable name of the platform
     ///
     /// # Examples
@@ -72,7 +72,7 @@ impl Platform {
             Platform::Unknown => "Unknown",
         }
     }
-    
+
     /// Get the platform as a lowercase string identifier
     ///
     /// Useful for configuration files and CLI arguments.
@@ -93,7 +93,7 @@ impl Platform {
             Platform::Unknown => "unknown",
         }
     }
-    
+
     /// Parse a platform from a string
     ///
     /// # Examples
@@ -129,14 +129,14 @@ mod tests {
     #[test]
     fn test_platform_current() {
         let platform = Platform::current();
-        
+
         // Should detect the current platform correctly
         #[cfg(target_os = "linux")]
         assert_eq!(platform, Platform::Linux);
-        
+
         #[cfg(target_os = "macos")]
         assert_eq!(platform, Platform::MacOS);
-        
+
         #[cfg(target_os = "windows")]
         assert_eq!(platform, Platform::Windows);
     }
@@ -170,15 +170,15 @@ mod tests {
         assert_eq!(Platform::from_str("linux"), Some(Platform::Linux));
         assert_eq!(Platform::from_str("Linux"), Some(Platform::Linux));
         assert_eq!(Platform::from_str("LINUX"), Some(Platform::Linux));
-        
+
         assert_eq!(Platform::from_str("macos"), Some(Platform::MacOS));
         assert_eq!(Platform::from_str("darwin"), Some(Platform::MacOS));
         assert_eq!(Platform::from_str("osx"), Some(Platform::MacOS));
-        
+
         assert_eq!(Platform::from_str("windows"), Some(Platform::Windows));
         assert_eq!(Platform::from_str("win32"), Some(Platform::Windows));
         assert_eq!(Platform::from_str("win64"), Some(Platform::Windows));
-        
+
         assert_eq!(Platform::from_str("invalid"), None);
         assert_eq!(Platform::from_str(""), None);
     }

@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use axum::http::StatusCode;
+use axum::routing::get;
+use axum::Router;
 use aya::maps::{HashMap, MapData, PerfEventArray};
 use aya::programs::{CgroupSkb, CgroupSkbAttachType};
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Ebpf};
 use aya_log::EbpfLogger;
-use axum::http::StatusCode;
-use axum::routing::get;
-use axum::Router;
 use bytes::BytesMut;
 use clap::{Parser, Subcommand};
 use prometheus::{Counter, Encoder, IntCounterVec, Opts, Registry, TextEncoder};
@@ -257,14 +257,13 @@ async fn run_daemon(
         .attach(cgroup_file, CgroupSkbAttachType::Egress)
         .context("Failed to attach eBPF program to cgroup")?;
 
-    info!(
-        "eBPF program attached to cgroup: {}",
-        cgroup_path.display()
-    );
+    info!("eBPF program attached to cgroup: {}", cgroup_path.display());
 
     // Populate the allowed gateways map
-    let mut allowed_gateways: HashMap<_, GatewayKey, u8> =
-        HashMap::try_from(bpf.map_mut("ALLOWED_GATEWAYS").context("Failed to get map")?)?;
+    let mut allowed_gateways: HashMap<_, GatewayKey, u8> = HashMap::try_from(
+        bpf.map_mut("ALLOWED_GATEWAYS")
+            .context("Failed to get map")?,
+    )?;
 
     for (ip, port) in &parsed_gateways {
         let key = GatewayKey::new(u32::from(*ip).to_be(), *port);
@@ -280,15 +279,19 @@ async fn run_daemon(
         use aya::programs::Lsm;
 
         // Set default policy
-        let mut default_deny_map: HashMap<_, u32, u8> =
-            HashMap::try_from(bpf.map_mut("DEFAULT_DENY").context("Failed to get DEFAULT_DENY map")?)?;
+        let mut default_deny_map: HashMap<_, u32, u8> = HashMap::try_from(
+            bpf.map_mut("DEFAULT_DENY")
+                .context("Failed to get DEFAULT_DENY map")?,
+        )?;
         default_deny_map
             .insert(0u32, if default_deny_files { 1u8 } else { 0u8 }, 0)
             .context("Failed to set default policy")?;
 
         // Populate path rules
-        let mut path_rules: HashMap<_, PathKey, PathRule> =
-            HashMap::try_from(bpf.map_mut("PATH_RULES").context("Failed to get PATH_RULES map")?)?;
+        let mut path_rules: HashMap<_, PathKey, PathRule> = HashMap::try_from(
+            bpf.map_mut("PATH_RULES")
+                .context("Failed to get PATH_RULES map")?,
+        )?;
 
         // Add allowed paths
         for path in &allow_paths {
@@ -325,8 +328,10 @@ async fn run_daemon(
                 if let Ok(lsm) = TryInto::<&mut Lsm>::try_into(prog) {
                     // Get BTF from /sys/kernel/btf/vmlinux
                     let btf = aya::Btf::from_sys_fs().context("Failed to load BTF")?;
-                    lsm.load(prog_name, &btf).context(format!("Failed to load LSM program {}", prog_name))?;
-                    lsm.attach().context(format!("Failed to attach LSM program {}", prog_name))?;
+                    lsm.load(prog_name, &btf)
+                        .context(format!("Failed to load LSM program {}", prog_name))?;
+                    lsm.attach()
+                        .context(format!("Failed to attach LSM program {}", prog_name))?;
                     info!("Attached LSM program: {}", prog_name);
                 }
             }
