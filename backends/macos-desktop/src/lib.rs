@@ -6,9 +6,8 @@
 
 #![warn(missing_docs)]
 
-// UI module temporarily disabled - needs cocoa API fixes
-// TODO: Fix UI module cocoa API compatibility issues
-// pub mod ui;
+/// UI module - macOS native UI components
+pub mod ui;
 pub mod registry;
 
 use agent_gateway_enforcer_core::backend::{

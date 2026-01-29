@@ -199,22 +199,22 @@ pub struct FileBlockedEvent {
     pub _pad: u8,
 }
 
-#[cfg(all(feature = "user", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for GatewayKey {}
 
-#[cfg(all(feature = "user", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for BlockedKey {}
 
-#[cfg(all(feature = "user", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for BlockedEvent {}
 
-#[cfg(all(feature = "user", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for PathKey {}
 
-#[cfg(all(feature = "user", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for PathRule {}
 
-#[cfg(all(feature = "user", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for FileBlockedEvent {}
 
 // ============================================================================

@@ -74,7 +74,7 @@ impl BackendLifecycleManager {
         _config: &UnifiedConfig,
     ) -> Result<()> {
         // Stop current backend if running
-        self.stop_current_backend()?;
+        self.stop_current_backend().await?;
 
         // Create new backend
         let backend = self.registry.get_backend(backend_type).await?;
@@ -96,7 +96,7 @@ impl BackendLifecycleManager {
         // For now, we'll document this limitation
 
         // Store as current backend
-        let mut current = self.current_backend.blocking_write();
+        let mut current = self.current_backend.write().await;
         *current = Some(backend_arc);
 
         Ok(())
@@ -139,8 +139,8 @@ impl BackendLifecycleManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn stop_current_backend(&self) -> Result<()> {
-        let mut current = self.current_backend.blocking_write();
+    pub async fn stop_current_backend(&self) -> Result<()> {
+        let mut current = self.current_backend.write().await;
         if let Some(_backend) = current.take() {
             // Backend cleanup would happen here
             // In practice: backend.stop()?; backend.cleanup()?;
@@ -165,13 +165,11 @@ impl BackendLifecycleManager {
     /// }
     /// # }
     /// ```
-    pub fn current_backend(&self) -> Option<Arc<dyn EnforcementBackend>> {
+    pub async fn current_backend(&self) -> Option<Arc<dyn EnforcementBackend>> {
         // Note: This returns a clone of the Option<Arc<EnforcementBackend>>
         // We need to handle this carefully since we can't clone the trait object directly
-        tokio::task::block_in_place(|| {
-            let guard = self.current_backend.blocking_read();
-            guard.clone()
-        })
+        let guard = self.current_backend.read().await;
+        guard.clone()
     }
 
     /// Check if a backend is currently running
@@ -205,7 +203,7 @@ impl BackendLifecycleManager {
     /// # }
     /// ```
     pub async fn health_check(&self) -> Result<BackendHealth> {
-        if let Some(backend) = self.current_backend() {
+        if let Some(backend) = self.current_backend().await {
             backend.health_check()
         } else {
             Ok(BackendHealth {
@@ -237,8 +235,8 @@ impl BackendLifecycleManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn reconfigure(&self, config: &UnifiedConfig) -> Result<()> {
-        if let Some(backend) = self.current_backend() {
+    pub async fn reconfigure(&self, config: &UnifiedConfig) -> Result<()> {
+        if let Some(backend) = self.current_backend().await {
             backend.configure_gateways(&config.gateways)?;
             backend.configure_file_access(&config.file_access)?;
             Ok(())

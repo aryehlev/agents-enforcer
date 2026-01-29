@@ -4,10 +4,10 @@
 
 use anyhow::Result;
 use cocoa::appkit::{
-    NSApp, NSApplication, NSBackingStoreType, NSTabView, NSTabViewItem, NSTextField, NSWindow,
+    NSBackingStoreType, NSTabViewItem, NSTextField, NSWindow,
     NSWindowStyleMask,
 };
-use cocoa::base::{id, nil, NO, YES};
+use cocoa::base::{id, nil, NO};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
 use objc::{class, msg_send, sel, sel_impl};
 use std::sync::{Arc, Mutex};
@@ -101,7 +101,7 @@ impl PreferencesWindow {
     
     /// Create the tab view
     unsafe fn create_tab_view() -> id {
-        let tab_view = NSTabView::alloc(nil);
+        let tab_view: id = msg_send![class!(NSTabView), alloc];
         let frame = NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(600.0, 500.0),

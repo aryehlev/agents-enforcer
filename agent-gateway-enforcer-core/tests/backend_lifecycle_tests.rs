@@ -284,7 +284,7 @@ async fn test_lifecycle_manager_switch_backends() {
     assert!(lifecycle.is_running());
 
     // Verify we can get the current backend
-    let current = lifecycle.current_backend();
+    let current = lifecycle.current_backend().await;
     assert!(current.is_some());
 }
 
@@ -311,7 +311,7 @@ async fn test_lifecycle_manager_current_backend() {
     let config = create_test_config();
 
     // No backend initially
-    assert!(lifecycle.current_backend().is_none());
+    assert!(lifecycle.current_backend().await.is_none());
 
     // Start backend
     lifecycle
@@ -320,7 +320,7 @@ async fn test_lifecycle_manager_current_backend() {
         .unwrap();
 
     // Should have a current backend
-    let current = lifecycle.current_backend();
+    let current = lifecycle.current_backend().await;
     assert!(current.is_some());
     assert_eq!(current.unwrap().backend_type(), backend_type);
 }

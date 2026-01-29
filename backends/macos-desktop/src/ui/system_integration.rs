@@ -6,8 +6,7 @@
 //! - System extension management
 
 use anyhow::Result;
-use cocoa::appkit::NSUserNotification;
-use cocoa::base::{id, nil, NO, YES};
+use cocoa::base::{id, nil};
 use cocoa::foundation::{NSAutoreleasePool, NSString};
 use objc::{class, msg_send, sel, sel_impl};
 
@@ -227,7 +226,8 @@ impl SystemIntegration {
             
             if url != nil {
                 let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-                let _: () = msg_send![workspace, activateFileViewerSelectingURLs: msg_send![class!(NSArray), arrayWithObject: url]];
+                let urls_array: id = msg_send![class!(NSArray), arrayWithObject: url];
+                let _: () = msg_send![workspace, activateFileViewerSelectingURLs: urls_array];
             }
         }
         

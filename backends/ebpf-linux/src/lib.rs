@@ -25,9 +25,13 @@ use tokio::sync::mpsc;
 // Linux-specific imports for eBPF
 #[cfg(target_os = "linux")]
 use aya::{
-    maps::{HashMap as BpfHashMap, Map, MapData},
-    Bpf,
+    include_bytes_aligned,
+    maps::{Array, HashMap as BpfHashMap, Map, MapData, RingBuf},
+    programs::{Lsm, Program},
+    Bpf, BpfLoader, Btf,
 };
+#[cfg(target_os = "linux")]
+use std::path::Path;
 
 #[cfg(target_os = "linux")]
 use agent_gateway_enforcer_common::{
@@ -207,20 +211,23 @@ impl EbpfLinuxBackend {
     /// Validate kernel version and eBPF support (Linux only)
     #[cfg(target_os = "linux")]
     fn validate_kernel_support(&self) -> Result<()> {
-        use nix::sys::utsname::uname;
+        use std::fs;
 
-        let uname_info =
-            uname().map_err(|e| anyhow::anyhow!("Failed to get kernel info: {}", e))?;
-        let release = uname_info
-            .release()
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("Invalid kernel release string"))?;
+        // Read kernel version from /proc/version
+        let version_str = fs::read_to_string("/proc/version")
+            .map_err(|e| anyhow::anyhow!("Failed to read /proc/version: {}", e))?;
+
+        // Extract version number (e.g., "Linux version 5.15.0-...")
+        let release = version_str
+            .split_whitespace()
+            .nth(2)
+            .ok_or_else(|| anyhow::anyhow!("Invalid /proc/version format"))?;
 
         // Parse kernel version (major.minor.patch)
         let version_parts: Vec<u32> = release
             .split('.')
             .take(3)
-            .filter_map(|s| s.split('-').next()?.parse().ok())
+            .filter_map(|s: &str| s.split('-').next()?.parse::<u32>().ok())
             .collect();
 
         if version_parts.len() < 2 {
@@ -256,29 +263,153 @@ impl EbpfLinuxBackend {
     async fn load_ebpf_programs(&self) -> Result<()> {
         tracing::info!("Loading eBPF programs");
 
-        // In a real implementation, this would load compiled eBPF bytecode
-        // For now, we'll create a placeholder that returns an error indicating
-        // that eBPF programs need to be compiled first
+        // Try to find compiled eBPF bytecode
+        let lsm_path = self.find_ebpf_object("lsm.o")?;
 
-        // TODO: Implement actual eBPF program loading
-        // Expected files:
-        // - network.o: Network filtering program (cgroup_skb)
-        // - lsm.o: File access control program (LSM hooks)
+        if !lsm_path.exists() {
+            tracing::warn!(
+                "eBPF object file not found at {:?} - running in stub mode",
+                lsm_path
+            );
+            tracing::warn!("To enable eBPF enforcement, compile the eBPF programs:");
+            tracing::warn!("  cd backends/ebpf-linux/ebpf && make");
+            return Ok(());
+        }
 
-        tracing::warn!("eBPF program loading not yet implemented - stub mode");
+        tracing::info!("Loading LSM eBPF program from {:?}", lsm_path);
+
+        // Load BTF for CO-RE (Compile Once - Run Everywhere)
+        let btf = Btf::from_sys_fs().ok();
+
+        // Load the eBPF program
+        let mut bpf = BpfLoader::new()
+            .btf(btf.as_ref())
+            .load_file(&lsm_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load eBPF program: {}", e))?;
+
+        tracing::info!("eBPF program loaded successfully");
+
+        // Store the program handle
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+        ebpf_state.lsm_program = Some(bpf);
+
         Ok(())
+    }
+
+    /// Find eBPF object file in standard locations
+    #[cfg(target_os = "linux")]
+    fn find_ebpf_object(&self, name: &str) -> Result<std::path::PathBuf> {
+        // Check in order of preference:
+        // 1. Current directory
+        // 2. ./ebpf/ subdirectory
+        // 3. /usr/lib/agent-gateway-enforcer/
+        // 4. Relative to executable
+
+        let paths = [
+            std::path::PathBuf::from(name),
+            std::path::PathBuf::from(format!("ebpf/{}", name)),
+            std::path::PathBuf::from(format!("backends/ebpf-linux/ebpf/{}", name)),
+            std::path::PathBuf::from(format!("/usr/lib/agent-gateway-enforcer/{}", name)),
+        ];
+
+        for path in &paths {
+            if path.exists() {
+                return Ok(path.clone());
+            }
+        }
+
+        // Return first path for error message
+        Ok(paths[2].clone())
     }
 
     /// Attach eBPF programs to appropriate hooks (Linux only)
     #[cfg(target_os = "linux")]
     async fn attach_programs(&self) -> Result<()> {
-        tracing::info!("Attaching eBPF programs");
+        tracing::info!("Attaching eBPF programs to LSM hooks");
 
-        // TODO: Implement actual program attachment
-        // - Attach network program to cgroup
-        // - Attach LSM program to file operation hooks
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
 
-        tracing::warn!("eBPF program attachment not yet implemented - stub mode");
+        if let Some(ref mut bpf) = ebpf_state.lsm_program {
+            // Load BTF for LSM attachment
+            let btf = Btf::from_sys_fs()
+                .map_err(|e| anyhow::anyhow!("Failed to load BTF: {}", e))?;
+
+            // Attach the file_open LSM program
+            let program: &mut Lsm = bpf
+                .program_mut("file_open_block")
+                .ok_or_else(|| anyhow::anyhow!("LSM program 'file_open_block' not found"))?
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("Program is not an LSM program: {}", e))?;
+
+            program
+                .load("file_open", &btf)
+                .map_err(|e| anyhow::anyhow!("Failed to load LSM program: {}", e))?;
+
+            program
+                .attach()
+                .map_err(|e| anyhow::anyhow!("Failed to attach LSM program: {}", e))?;
+
+            tracing::info!("LSM program attached to file_open hook");
+
+            // Configure the maps with blocked processes
+            self.configure_blocked_processes(bpf)?;
+
+            tracing::info!("eBPF programs attached successfully");
+        } else {
+            tracing::warn!("No eBPF program loaded - running in stub mode");
+        }
+
+        Ok(())
+    }
+
+    /// Configure blocked processes in eBPF map
+    #[cfg(target_os = "linux")]
+    fn configure_blocked_processes(&self, bpf: &mut Bpf) -> Result<()> {
+        // Get the blocked_processes map
+        let mut blocked_procs: Array<_, [u8; 16]> = bpf
+            .map_mut("blocked_processes")
+            .ok_or_else(|| anyhow::anyhow!("Map 'blocked_processes' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("Failed to get blocked_processes map: {}", e))?;
+
+        // Add blocked process names
+        let blocked_names = ["opencode", "open-code", "opencode-ag"];
+        for (i, name) in blocked_names.iter().enumerate() {
+            let mut comm = [0u8; 16];
+            let bytes = name.as_bytes();
+            let len = bytes.len().min(15);
+            comm[..len].copy_from_slice(&bytes[..len]);
+
+            blocked_procs
+                .set(i as u32, comm, 0)
+                .map_err(|e| anyhow::anyhow!("Failed to set blocked process {}: {}", name, e))?;
+
+            tracing::debug!("Added blocked process: {}", name);
+        }
+
+        // Set the config for number of blocked processes
+        let mut config: Array<_, u32> = bpf
+            .map_mut("config")
+            .ok_or_else(|| anyhow::anyhow!("Map 'config' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("Failed to get config map: {}", e))?;
+
+        // CONFIG_ENABLED = 0, CONFIG_NUM_BLOCKED_PROCS = 2
+        config.set(0, 1u32, 0)?; // Enable enforcement
+        config.set(2, blocked_names.len() as u32, 0)?; // Number of blocked procs
+        config.set(1, 1u32, 0)?; // Block all paths for blocked processes
+
+        tracing::info!(
+            "Configured {} blocked processes in eBPF map",
+            blocked_names.len()
+        );
+
         Ok(())
     }
 
@@ -515,12 +646,26 @@ impl EnforcementBackend for EbpfLinuxBackend {
             ));
         }
 
-        // Attach eBPF programs (Linux only)
+        // Load and attach eBPF programs (Linux only)
         #[cfg(target_os = "linux")]
         {
-            // In a real implementation, we would attach programs here
-            // For now, we log that we're in stub mode
-            tracing::warn!("eBPF program attachment not yet implemented - stub mode");
+            // Use tokio runtime to run async functions
+            let rt = tokio::runtime::Handle::try_current();
+            if let Ok(handle) = rt {
+                // We're in an async context, spawn blocking
+                let self_ref = self as *mut Self;
+                handle.block_on(async {
+                    // SAFETY: We're in the same thread and borrowing for a limited scope
+                    let backend = unsafe { &*self_ref };
+                    if let Err(e) = backend.load_ebpf_programs().await {
+                        tracing::warn!("Failed to load eBPF programs: {} - running in stub mode", e);
+                    } else if let Err(e) = backend.attach_programs().await {
+                        tracing::warn!("Failed to attach eBPF programs: {} - running in stub mode", e);
+                    }
+                });
+            } else {
+                tracing::warn!("No tokio runtime available - running in stub mode");
+            }
         }
 
         self.set_state(BackendState::Running)?;
@@ -540,22 +685,14 @@ impl EnforcementBackend for EbpfLinuxBackend {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
 
-            // Unload network program
-            if let Some(ref mut bpf) = ebpf_state.network_program {
-                for (name, program) in bpf.programs_mut() {
-                    if let Err(e) = program.unload() {
-                        tracing::warn!("Failed to unload network program {}: {}", name, e);
-                    }
-                }
+            // Drop network program (this unloads all attached programs)
+            if ebpf_state.network_program.take().is_some() {
+                tracing::info!("Network eBPF program unloaded");
             }
 
-            // Unload LSM program
-            if let Some(ref mut bpf) = ebpf_state.lsm_program {
-                for (name, program) in bpf.programs_mut() {
-                    if let Err(e) = program.unload() {
-                        tracing::warn!("Failed to unload LSM program {}: {}", name, e);
-                    }
-                }
+            // Drop LSM program (this unloads all attached programs)
+            if ebpf_state.lsm_program.take().is_some() {
+                tracing::info!("LSM eBPF program unloaded");
             }
         }
 

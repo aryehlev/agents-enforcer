@@ -22,6 +22,10 @@ use agent_gateway_enforcer_core::{
     web::{WebConfig, WebServer},
 };
 
+// Import platform-specific backend registration functions
+#[cfg(all(target_os = "linux", feature = "ebpf-linux"))]
+use ebpf_linux::registry as ebpf_registry;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -291,8 +295,19 @@ async fn run_enforcer(
 ) -> Result<()> {
     info!("Initializing enforcer components...");
 
-    // Initialize backend registry
-    let registry = Arc::new(BackendRegistry::new());
+    // Initialize backend registry and register available backends
+    let mut registry = BackendRegistry::new();
+
+    // Register platform-specific backends
+    #[cfg(all(target_os = "linux", feature = "ebpf-linux"))]
+    {
+        info!("Registering Linux eBPF backend...");
+        if let Err(e) = ebpf_registry::register_backend(&mut registry) {
+            warn!("Failed to register eBPF backend: {}", e);
+        }
+    }
+
+    let registry = Arc::new(registry);
     info!("Backend registry initialized");
 
     // List available backends
@@ -422,7 +437,7 @@ async fn run_enforcer(
     info!("Shutting down...");
 
     // Stop the backend
-    if let Err(e) = app_state.lifecycle_manager.stop_current_backend() {
+    if let Err(e) = app_state.lifecycle_manager.stop_current_backend().await {
         error!("Error stopping backend: {}", e);
     } else {
         info!("Backend stopped");

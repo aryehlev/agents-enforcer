@@ -3,11 +3,15 @@
 //! Native macOS NSAlert dialogs for security decisions.
 
 use anyhow::Result;
-use cocoa::appkit::{NSAlert, NSAlertStyle};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSAutoreleasePool, NSString};
-use objc::{msg_send, sel, sel_impl};
+use objc::{class, msg_send, sel, sel_impl};
 use std::net::IpAddr;
+
+// NSAlertStyle constants
+const NS_ALERT_STYLE_WARNING: i64 = 0;
+const NS_ALERT_STYLE_INFORMATIONAL: i64 = 1;
+const NS_ALERT_STYLE_CRITICAL: i64 = 2;
 
 /// Type of permission prompt
 #[derive(Debug, Clone)]
@@ -111,8 +115,8 @@ impl PermissionPrompt {
         protocol: &str,
         process: &Option<String>,
     ) {
-        // Set alert style
-        let _: () = msg_send![alert, setAlertStyle: NSAlertStyle::NSWarningAlertStyle];
+        // Set alert style (NSWarningAlertStyle = 0)
+        let _: () = msg_send![alert, setAlertStyle: NS_ALERT_STYLE_WARNING];
         
         // Set message text
         let message = NSString::alloc(nil)
@@ -149,8 +153,8 @@ impl PermissionPrompt {
         operation: &FileOperation,
         process: &Option<String>,
     ) {
-        // Set alert style
-        let _: () = msg_send![alert, setAlertStyle: NSAlertStyle::NSWarningAlertStyle];
+        // Set alert style (NSWarningAlertStyle = 0)
+        let _: () = msg_send![alert, setAlertStyle: NS_ALERT_STYLE_WARNING];
         
         // Set message text
         let message = NSString::alloc(nil)
@@ -197,7 +201,7 @@ impl PermissionPrompt {
             let _pool = NSAutoreleasePool::new(nil);
             
             let alert: id = msg_send![class!(NSAlert), new];
-            let _: () = msg_send![alert, setAlertStyle: NSAlertStyle::NSInformationalAlertStyle];
+            let _: () = msg_send![alert, setAlertStyle: NS_ALERT_STYLE_INFORMATIONAL];
             
             let title_ns = NSString::alloc(nil).init_str(title);
             let _: () = msg_send![alert, setMessageText: title_ns];
@@ -219,7 +223,7 @@ impl PermissionPrompt {
             let _pool = NSAutoreleasePool::new(nil);
             
             let alert: id = msg_send![class!(NSAlert), new];
-            let _: () = msg_send![alert, setAlertStyle: NSAlertStyle::NSCriticalAlertStyle];
+            let _: () = msg_send![alert, setAlertStyle: NS_ALERT_STYLE_CRITICAL];
             
             let title_ns = NSString::alloc(nil).init_str(title);
             let _: () = msg_send![alert, setMessageText: title_ns];
