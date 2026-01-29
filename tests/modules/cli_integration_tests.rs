@@ -8,7 +8,7 @@
 //! - Interactive mode functionality
 //! - Environment variable integration
 
-use crate::test_utils::*;
+use agent_gateway_enforcer_tests::*;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -200,15 +200,17 @@ fn test_cli_config_loading() {
         fn load_config(&mut self, path: &PathBuf) -> Result<(), anyhow::Error> {
             self.config_path = Some(path.clone());
 
-            // Simulate config loading
-            if path.exists() {
-                self.config_loaded = true;
+            // Simulate config loading - return error if file doesn't exist
+            if !path.exists() {
+                return Err(anyhow::anyhow!("Config file not found: {:?}", path));
+            }
 
-                // Basic validation simulation
-                let content = std::fs::read_to_string(path)?;
-                if content.contains("server:") && content.contains("backend:") {
-                    self.config_valid = true;
-                }
+            self.config_loaded = true;
+
+            // Basic validation simulation
+            let content = std::fs::read_to_string(path)?;
+            if content.contains("server:") && content.contains("backend:") {
+                self.config_valid = true;
             }
 
             Ok(())
@@ -438,25 +440,25 @@ fn test_cli_backend_commands() {
             }
             BackendCommand::Status { backend_name } => {
                 assert!(command_str.contains("status"));
-                if let Some(name) = backend_name {
-                    assert!(command_str.contains(name));
+                if let Some(ref name) = backend_name {
+                    assert!(command_str.contains(name.as_str()));
                 }
             }
             BackendCommand::Start { backend_name } => {
                 assert!(command_str.contains("start"));
-                assert!(command_str.contains(backend_name));
+                assert!(command_str.contains(&backend_name));
             }
             BackendCommand::Stop { backend_name } => {
                 assert!(command_str.contains("stop"));
-                assert!(command_str.contains(backend_name));
+                assert!(command_str.contains(&backend_name));
             }
             BackendCommand::Restart { backend_name } => {
                 assert!(command_str.contains("restart"));
-                assert!(command_str.contains(backend_name));
+                assert!(command_str.contains(&backend_name));
             }
             BackendCommand::Switch { backend_name } => {
                 assert!(command_str.contains("switch"));
-                assert!(command_str.contains(backend_name));
+                assert!(command_str.contains(&backend_name));
             }
         }
     }
@@ -665,7 +667,7 @@ fn test_cli_monitoring_commands() {
             },
         ),
         (
-            "agent-gateway-enforcer monitor --filter severity=error --filter type=network",
+            "agent-gateway-enforcer monitor --mode log --filter severity=error --filter type=network",
             MonitorCommand {
                 mode: "log".to_string(),
                 filters: vec!["severity=error".to_string(), "type=network".to_string()],

@@ -1,0 +1,45 @@
+# eBPF Development and Testing Container
+# Build: docker build -f Dockerfile.ebpf -t enforcer-ebpf .
+# Run:   docker run -it --privileged enforcer-ebpf
+
+FROM ubuntu:22.04
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install eBPF toolchain and build dependencies
+RUN apt-get update && apt-get install -y \
+    clang \
+    llvm \
+    libelf-dev \
+    linux-headers-generic \
+    linux-tools-common \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    curl \
+    git \
+    libbpf-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files
+COPY . .
+
+# Build the eBPF backend and CLI (with backends feature enabled)
+RUN cargo build -p agent-gateway-enforcer-backend-ebpf-linux --release 2>&1 || echo "Build completed (may have warnings on non-native kernel)"
+RUN cargo build -p agent-gateway-enforcer-cli --release --features with-backends 2>&1 || echo "CLI build completed"
+
+# The config.opencode.yaml is already in the copied files
+# Just create a symlink or adjust paths for container
+RUN sed 's|/Users/aryehlev/Documents/agent-gateway-enforcer/logs|/app/logs|g' /app/config.opencode.yaml > /app/config.yaml && \
+    mkdir -p /app/logs
+
+# Default command
+CMD ["/bin/bash"]

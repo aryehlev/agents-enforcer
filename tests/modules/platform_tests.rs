@@ -7,8 +7,9 @@
 //! - Platform-specific optimizations
 //! - Environment-specific behavior
 
-use crate::test_utils::*;
-use crate::{require_linux, require_macos, require_windows};
+use agent_gateway_enforcer_tests::*;
+// Note: require_linux, require_macos, require_windows macros are exported from integration_suite
+// and are available via #[macro_export] - don't import them, just use them directly
 
 /// Run all platform tests
 pub fn run_all_platform_tests() {
@@ -104,7 +105,7 @@ fn test_platform_detection() {
 fn test_platform_features() {
     println!("Testing platform features...");
 
-    let config = crate::test_config();
+    let config = super::test_config();
 
     // Test Linux-specific features
     if cfg!(target_os = "linux") {
@@ -398,10 +399,10 @@ fn test_cross_platform_permissions() {
         .create_temp_dir()
         .expect("Failed to create temp dir");
 
-    assert!(temp_dir.path().exists());
+    assert!(temp_dir.exists());
 
     // Test directory listing
-    let dir_contents = std::fs::read_dir(temp_dir.path()).expect("Failed to read directory");
+    let dir_contents = std::fs::read_dir(&temp_dir).expect("Failed to read directory");
 
     let count = dir_contents.count();
     println!("Directory contains {} items", count);
@@ -419,7 +420,7 @@ fn test_linux_specific_features() {
     require_linux!();
 
     // Test eBPF availability
-    if crate::test_config().platform.ebpf_available {
+    if super::test_config().platform.ebpf_available {
         println!("✓ eBPF is available");
 
         // Test kernel version check (simulated)

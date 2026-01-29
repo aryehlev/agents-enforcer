@@ -1,0 +1,59 @@
+# XcodeGen project specification for Agent Gateway Enforcer
+# Install xcodegen: brew install xcodegen
+# Generate project: xcodegen generate
+
+name: AgentGatewayEnforcer
+options:
+  bundleIdPrefix: com.agent-gateway-enforcer
+  deploymentTarget:
+    macOS: "11.0"
+  xcodeVersion: "14.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+targets:
+  AgentGatewayEnforcer:
+    type: application
+    platform: macOS
+    sources:
+      - path: AgentGatewayEnforcer
+        type: group
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agent-gateway-enforcer
+        INFOPLIST_FILE: AgentGatewayEnforcer/Info.plist
+        CODE_SIGN_ENTITLEMENTS: AgentGatewayEnforcer/AgentGatewayEnforcer.entitlements
+        PRODUCT_NAME: "Agent Gateway Enforcer"
+        SWIFT_VERSION: "5.0"
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        COPY_PHASE_STRIP: false
+    dependencies:
+      - target: FileSecurityExtension
+        embed: true
+        codeSign: true
+
+  FileSecurityExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: FileSecurityExtension
+        type: group
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agent-gateway-enforcer.filesecurity
+        INFOPLIST_FILE: FileSecurityExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FileSecurityExtension/FileSecurityExtension.entitlements
+        PRODUCT_NAME: FileSecurityExtension
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: true
+        SYSTEM_EXTENSION: true
+    frameworks:
+      - EndpointSecurity.framework
+      - SystemExtensions.framework

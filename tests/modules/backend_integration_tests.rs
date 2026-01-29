@@ -13,8 +13,8 @@
 //! - Performance testing
 //! - Error handling
 
-use crate::test_utils::*;
-use crate::{require_ebpf, require_linux, require_macos, require_privileges, require_windows};
+use agent_gateway_enforcer_tests::*;
+// Note: require_* macros are exported from integration_suite via #[macro_export]
 use std::time::Duration;
 
 /// Run all backend integration tests
@@ -75,7 +75,7 @@ fn test_backend_registry() {
     }
 
     // Test backend availability detection
-    let config = crate::test_config();
+    let config = super::test_config();
     println!(
         "Linux backend available: {}",
         config.platform.run_linux_tests
@@ -454,6 +454,7 @@ fn test_backend_performance() {
 
     let backend = MockBackend::new("performance_test", "mock", "cross-platform");
     backend.initialize().expect("Failed to initialize backend");
+    backend.clear_operations(); // Clear initialize operation for accurate count
 
     let start_time = std::time::Instant::now();
 
@@ -494,6 +495,7 @@ fn test_backend_concurrent_operations() {
         "cross-platform",
     ));
     backend.initialize().expect("Failed to initialize backend");
+    backend.clear_operations(); // Clear initialize operation
 
     let mut handles = vec![];
 

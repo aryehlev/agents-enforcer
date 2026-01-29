@@ -39,18 +39,18 @@ impl TempDirManager {
         }
     }
 
-    /// Create a new temporary directory
-    pub fn create_temp_dir(&self) -> Result<TempDir, anyhow::Error> {
+    /// Create a new temporary directory and return its path
+    pub fn create_temp_dir(&self) -> Result<PathBuf, anyhow::Error> {
         let temp_dir = tempdir()?;
+        let path = temp_dir.path().to_path_buf();
         self.temp_dirs.lock().unwrap().push(temp_dir);
-        // Return a reference to the just-added directory
-        Ok(self.temp_dirs.lock().unwrap().last().unwrap().clone())
+        Ok(path)
     }
 
     /// Create a temporary file with given content
     pub fn create_temp_file(&self, name: &str, content: &str) -> Result<PathBuf, anyhow::Error> {
-        let temp_dir = self.create_temp_dir()?;
-        let file_path = temp_dir.path().join(name);
+        let temp_path = self.create_temp_dir()?;
+        let file_path = temp_path.join(name);
         fs::write(&file_path, content)?;
         Ok(file_path)
     }

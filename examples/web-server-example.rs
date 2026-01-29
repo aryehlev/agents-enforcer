@@ -31,13 +31,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("CONFIG_PATH").unwrap_or_else(|_| "examples/config-example.yaml".to_string());
 
     println!("Loading configuration from: {}", config_path);
-    let config_manager = Arc::new(RwLock::new(ConfigManager::from_file(&config_path)?));
+    let config_manager = Arc::new(RwLock::new(ConfigManager::new(&config_path)));
 
     // Create metrics registry
-    let metrics_registry = Arc::new(MetricsRegistry::new());
+    let metrics_registry = Arc::new(MetricsRegistry::new_default()?);
 
-    // Create event bus
-    let event_bus = Arc::new(EventBus::new());
+    // Create event bus (capacity of 1000 events)
+    let event_bus = Arc::new(EventBus::new(1000));
 
     // Configure web server
     let web_config = WebConfig {

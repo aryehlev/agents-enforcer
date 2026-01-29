@@ -9,7 +9,7 @@
 //! - Configuration watchers
 //! - Error handling
 
-use crate::test_utils::*;
+use agent_gateway_enforcer_tests::*;
 use serde_json;
 use std::collections::HashMap;
 use std::path::Path;
@@ -379,7 +379,7 @@ logging:
                         "server.port".to_string(),
                         trimmed.split(':').nth(1).unwrap_or("").trim().to_string(),
                     );
-                } else if trimmed.starts_with("type:") && trimmed.contains("backend:") {
+                } else if trimmed.starts_with("type:") {
                     // This is a simplified parser - real implementation would use YAML/JSON/TOML libs
                     self.config.insert(
                         "backend.type".to_string(),
@@ -598,7 +598,7 @@ backend:
                 } else if trimmed.starts_with("workers:") {
                     let value = trimmed.split(':').nth(1).unwrap_or("").trim().to_string();
                     new_config.insert("server.workers".to_string(), value);
-                } else if trimmed.starts_with("type:") && trimmed.contains("backend:") {
+                } else if trimmed.starts_with("type:") {
                     let value = trimmed
                         .split(':')
                         .nth(1)

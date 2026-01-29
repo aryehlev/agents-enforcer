@@ -8,7 +8,7 @@
 //! - Event metadata and custom fields
 //! - Performance under load
 
-use crate::test_utils::*;
+use agent_gateway_enforcer_tests::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -163,7 +163,7 @@ struct MockEventBus {
     statistics: Arc<Mutex<EventBusStatistics>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct EventBusStatistics {
     total_events: usize,
     events_by_type: HashMap<String, usize>,
@@ -171,11 +171,21 @@ struct EventBusStatistics {
     handlers_registered: usize,
 }
 
-#[derive(Clone)]
 struct MockEventHandler {
     id: String,
-    event_filter: Option<Box<dyn Fn(&MockEvent) -> bool + Send + Sync>>,
+    #[allow(dead_code)]
+    event_filter: Option<Arc<dyn Fn(&MockEvent) -> bool + Send + Sync>>,
     received_events: Arc<Mutex<Vec<MockEvent>>>,
+}
+
+impl Clone for MockEventHandler {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            event_filter: self.event_filter.clone(),
+            received_events: Arc::clone(&self.received_events),
+        }
+    }
 }
 
 impl MockEventHandler {
@@ -191,7 +201,7 @@ impl MockEventHandler {
     where
         F: Fn(&MockEvent) -> bool + Send + Sync + 'static,
     {
-        self.event_filter = Some(Box::new(filter));
+        self.event_filter = Some(Arc::new(filter));
         self
     }
 

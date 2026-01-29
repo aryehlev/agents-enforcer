@@ -8,7 +8,7 @@
 //! - Multiple metric registries
 //! - Metric labels and annotations
 
-use crate::test_utils::*;
+use agent_gateway_enforcer_tests::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -271,7 +271,7 @@ fn test_histogram_metrics() {
     println!("Testing histogram metrics...");
 
     let buckets = vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0];
-    let histogram = MockHistogram::new("test_histogram", "A test histogram metric", buckets);
+    let histogram = MockHistogram::new("test_histogram", "A test histogram metric", buckets.clone());
 
     // Test initial state
     assert_eq!(histogram.get_count(), 0);
@@ -353,7 +353,7 @@ fn test_network_metrics() {
     );
 
     // Simulate network activity
-    network_connections.set(5);
+    network_connections.set(5.0);
     network_bytes_sent.inc_by(1024.0);
     network_bytes_received.inc_by(2048.0);
     network_latency.observe(0.025);
@@ -475,7 +475,7 @@ fn test_security_metrics() {
 
     // Simulate security events
     security_events.inc();
-    blocked_connections.inc_by(3);
+    blocked_connections.inc_by(3.0);
     authentication_failures.inc();
     policy_violations.inc();
 

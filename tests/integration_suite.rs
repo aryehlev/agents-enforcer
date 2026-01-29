@@ -64,17 +64,23 @@ use std::env;
 use std::path::Path;
 use std::time::Duration;
 
-// Test utilities
-mod test_utils;
+// Import test utilities from the library
+use agent_gateway_enforcer_tests::test_utils;
 
-// Test modules
-// TODO: Add platform_tests when implemented
-// mod platform_tests;
+// Test modules - path attributes to load from modules subdirectory
+#[path = "modules/platform_tests.rs"]
+mod platform_tests;
+#[path = "modules/backend_integration_tests.rs"]
 mod backend_integration_tests;
+#[path = "modules/cli_integration_tests.rs"]
 mod cli_integration_tests;
+#[path = "modules/configuration_tests.rs"]
 mod configuration_tests;
+#[path = "modules/event_system_tests.rs"]
 mod event_system_tests;
+#[path = "modules/metrics_tests.rs"]
 mod metrics_tests;
+#[path = "modules/web_interface_tests.rs"]
 mod web_interface_tests;
 // TODO: Add security_tests when implemented
 // mod security_tests;
