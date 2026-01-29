@@ -497,7 +497,7 @@ impl WebSocketStreamer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{EventBus, EventFilter, EventSource, EventTypeFilter, SystemAction};
+    use crate::events::{EventBus, EventFilter, EventSource, EventType, EventTypeFilter, SystemAction};
 
     #[tokio::test]
     async fn test_event_streamer_basic() {
