@@ -135,7 +135,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: agent-gateway-enforcer-linux-x86_64.tar.gz
           body: |
