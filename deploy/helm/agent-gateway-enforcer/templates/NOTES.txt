@@ -1,0 +1,81 @@
+Agent Gateway Enforcer has been deployed!
+
+=============================================================================
+ CONFIGURATION
+=============================================================================
+
+Allowed Gateways:
+{{- range .Values.gateways }}
+  - {{ . }}
+{{- end }}
+
+Target Cgroup: {{ .Values.cgroup }}
+
+{{- if .Values.fileEnforcement.enabled }}
+
+File Enforcement: ENABLED
+  Default Policy: {{ if .Values.fileEnforcement.defaultDeny }}DENY (allowlist mode){{ else }}ALLOW (blocklist mode){{ end }}
+{{- if .Values.fileEnforcement.allowPaths }}
+  Allowed Paths:
+{{- range .Values.fileEnforcement.allowPaths }}
+    + {{ . }}
+{{- end }}
+{{- end }}
+{{- if .Values.fileEnforcement.denyPaths }}
+  Denied Paths:
+{{- range .Values.fileEnforcement.denyPaths }}
+    - {{ . }}
+{{- end }}
+{{- end }}
+{{- else }}
+
+File Enforcement: DISABLED
+{{- end }}
+
+=============================================================================
+ METRICS
+=============================================================================
+
+{{- if .Values.metrics.enabled }}
+
+Metrics endpoint is available at port {{ .Values.metrics.port }}.
+
+To access metrics from your local machine:
+
+  kubectl port-forward -n {{ .Release.Namespace }} \
+    daemonset/{{ include "agent-gateway-enforcer.fullname" . }} {{ .Values.metrics.port }}:{{ .Values.metrics.port }}
+
+Then visit: http://localhost:{{ .Values.metrics.port }}/metrics
+
+{{- if .Values.metrics.serviceMonitor.enabled }}
+
+A ServiceMonitor has been created for Prometheus Operator.
+{{- end }}
+{{- else }}
+
+Metrics are disabled.
+{{- end }}
+
+=============================================================================
+ VERIFICATION
+=============================================================================
+
+Check the DaemonSet status:
+
+  kubectl get daemonset -n {{ .Release.Namespace }} {{ include "agent-gateway-enforcer.fullname" . }}
+
+View logs:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "agent-gateway-enforcer.name" . }} -f
+
+=============================================================================
+ IMPORTANT NOTES
+=============================================================================
+
+1. This DaemonSet runs with privileged access (required for eBPF)
+2. Ensure your nodes have kernel 5.8+ with BPF LSM support
+3. The enforcer attaches to the cgroup: {{ .Values.cgroup }}
+4. All processes in that cgroup will have network restrictions applied
+
+5. Kernel requirements:
+6. Linux kernel 5.7+ with BPF LSM support

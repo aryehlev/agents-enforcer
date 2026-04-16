@@ -1,0 +1,22 @@
+[package]
+name = "agent-gateway-enforcer"
+version = "0.1.0"
+edition = "2021"
+description = "Userspace daemon for agent gateway enforcement via eBPF"
+
+[dependencies]
+aya = { workspace = true }
+aya-log = { workspace = true }
+agent-gateway-enforcer-common = { path = "../agent-gateway-enforcer-common", features = ["user"] }
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+prometheus = { workspace = true }
+bytes = "1.5"
+
+[[bin]]
+name = "agent-gateway-enforcer"
+path = "src/main.rs"

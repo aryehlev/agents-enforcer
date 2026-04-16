@@ -1,0 +1,57 @@
+# Dependabot configuration for automatic dependency updates
+# See: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Monitor Cargo dependencies
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "agent-gateway-enforcer-team"
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      # Group Tokio-related updates
+      tokio:
+        patterns:
+          - "tokio*"
+      # Group Serde-related updates
+      serde:
+        patterns:
+          - "serde*"
+      # Group tracing-related updates
+      tracing:
+        patterns:
+          - "tracing*"
+      # Group testing-related updates
+      testing:
+        patterns:
+          - "criterion"
+          - "proptest"
+          - "quickcheck"
+
+  # Monitor GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "agent-gateway-enforcer-team"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"

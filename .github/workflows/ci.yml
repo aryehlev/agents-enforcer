@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, feature/*]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ==========================================================================
+  # Fast checks - run on every push
+  # ==========================================================================
+
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy on workspace
+        run: cargo clippy --workspace --all-targets -- -W clippy::all
+        continue-on-error: true # Don't fail on warnings, just report them
+
+  # ==========================================================================
+  # Multi-platform tests
+  # ==========================================================================
+
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        rust: [stable]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace --verbose --lib --bins
+        continue-on-error: false
+
+  # ==========================================================================
+  # Multi-platform builds
+  # ==========================================================================
+
+  build:
+    name: Build
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace (core packages only)
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            --package agent-gateway-enforcer-core \
+            --package agent-gateway-enforcer-common \
+            --package agent-gateway-enforcer-backend-ebpf-linux \
+            --package agent-gateway-enforcer-backend-macos
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-gateway-enforcer-cli-${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/agent-gateway-enforcer*
+          if-no-files-found: warn
+
+  # ==========================================================================
+  # eBPF Build (Linux only - Future implementation)
+  # ==========================================================================
+  # TODO: Implement eBPF program compilation when xtask is available
+  # build-ebpf:
+  #   name: Build eBPF Program
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install Rust nightly with rust-src
+  #       uses: dtolnay/rust-toolchain@nightly
+  #       with:
+  #         components: rust-src
+  #     - name: Cache cargo registry
+  #       uses: Swatinem/rust-cache@v2
+  #     - name: Install bpf-linker
+  #       run: cargo install bpf-linker
+  #     - name: Build eBPF program
+  #       run: cargo xtask build-ebpf
+  #     - name: Upload eBPF artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: ebpf-program
+  #         path: target/bpfel-unknown-none/release/*
+  #         if-no-files-found: warn
+
+  # ==========================================================================
+  # Security audit
+  # ==========================================================================
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run security audit
+        uses: rustsec/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true # Report but don't fail CI

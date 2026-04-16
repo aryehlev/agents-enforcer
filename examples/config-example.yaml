@@ -1,0 +1,104 @@
+version: "1.0"
+backend:
+  backend_type: auto
+  auto_detect: true
+  platform_specific: {}
+
+gateways:
+  - address: "127.0.0.1:8080"
+    description: "Local development gateway"
+    protocols: [tcp, udp]
+    enabled: true
+    priority: 0
+    tags: ["development", "local"]
+  - address: "10.0.0.1:443"
+    description: "Production HTTPS gateway"
+    protocols: [https, tcp]
+    enabled: true
+    priority: 10
+    tags: ["production", "https"]
+
+file_access:
+  enabled: true
+  default_policy: allow
+  rules:
+    - path: "/etc/passwd"
+      pattern: exact
+      policy: deny
+      permissions: [read, write]
+      applies_to: ["*"]
+      conditions: []
+    - path: "/tmp/*"
+      pattern: glob
+      policy: allow
+      permissions: [read, write, delete]
+      applies_to: ["*", "test-agent"]
+      conditions:
+        - condition_type: process_name
+          value: "test-agent"
+          operator: equals
+  protected_paths:
+    - pattern: "/etc/ssh/*"
+      pattern_type: glob
+      case_sensitive: true
+    - pattern: "/home/*/.ssh/*"
+      pattern_type: glob
+      case_sensitive: true
+  allowed_extensions: [".txt", ".log", ".tmp"]
+  monitored_processes: ["bash", "zsh", "python"]
+
+metrics:
+  enabled: true
+  port: 9090
+  endpoint: "/metrics"
+  retention_days: 7
+  export_formats: [prometheus, json]
+
+logging:
+  level: info
+  format: json
+  file: "/var/log/agent-gateway-enforcer.log"
+  console: true
+  structured: true
+  fields:
+    timestamp:
+      enabled: true
+      format: "2006-01-02T15:04:05Z"
+    level:
+      enabled: true
+    component:
+      enabled: true
+
+ui:
+  show_status_bar: true
+  show_permission_prompts: true
+  prompt_timeout: 30
+  theme: system
+  language: "en"
+  web_dashboard:
+    enabled: false
+    port: 8080
+    host: "127.0.0.1"
+    tls: false
+    cert_file: null
+    key_file: null
+
+agents:
+  - name: "test-agent"
+    path: "/usr/local/bin/test-agent"
+    backend_specific: {}
+    permissions:
+      network_access: true
+      file_access: true
+      system_access: false
+      elevated_privileges: false
+  - name: "monitoring-agent"
+    path: "/usr/local/bin/monitoring-agent"
+    backend_specific:
+      poll_interval: "30s"
+      buffer_size: 1024
+    permissions:
+      network_access: true
+      file_access: true
+      system_access: true
+      elevated_privileges: false

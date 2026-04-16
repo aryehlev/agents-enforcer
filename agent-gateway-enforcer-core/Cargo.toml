@@ -1,0 +1,43 @@
+[package]
+name = "agent-gateway-enforcer-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "Platform-agnostic core for agent gateway enforcement"
+license = "MIT"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+prometheus = { workspace = true }
+notify = { workspace = true }
+regex = { workspace = true }
+
+# Additional dependencies
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
+warp = "0.3"
+glob = "0.3"
+libc = "0.2"
+toml = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Local dependencies
+agent-gateway-enforcer-common = { path = "../agent-gateway-enforcer-common", features = ["user"] }
+
+[features]
+default = []
+user = ["agent-gateway-enforcer-common/user"]
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"

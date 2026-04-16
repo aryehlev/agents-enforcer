@@ -1,0 +1,129 @@
+# Agent Gateway Enforcer - Example Configuration
+# This file demonstrates all available configuration options
+
+# Configuration version
+version: "1.0"
+
+# Backend configuration
+backend:
+  # Backend type: auto (auto-detect), ebpf_linux, macos_desktop, windows_desktop
+  backend_type: auto
+  # Auto-detect platform and use appropriate backend
+  auto_detect: true
+  # Platform-specific settings (optional)
+  platform_specific: {}
+
+# Gateway configurations (allowed outbound connections)
+gateways:
+  - address: "api.openai.com:443"
+    description: "OpenAI API endpoint"
+    protocols:
+      - https
+    enabled: true
+    priority: 100
+    tags:
+      - "ai"
+      - "production"
+
+  - address: "api.anthropic.com:443"
+    description: "Anthropic API endpoint"
+    protocols:
+      - https
+    enabled: true
+    priority: 100
+    tags:
+      - "ai"
+      - "production"
+
+  - address: "10.0.0.1:443"
+    description: "Internal API gateway"
+    protocols:
+      - tcp
+      - https
+    enabled: true
+    priority: 50
+    tags:
+      - "internal"
+
+# File access control configuration
+file_access:
+  enabled: true
+  # Default policy: allow or deny
+  default_policy: deny
+  # Allowed paths (when default_policy is deny)
+  allowed_paths:
+    - "/home/user/allowed/*"
+    - "/tmp/*"
+    - "/var/log/app.log"
+  # Denied paths (when default_policy is allow)
+  denied_paths:
+    - "/etc/passwd"
+    - "/etc/shadow"
+  # Quarantine settings
+  quarantine:
+    enabled: false
+    path: "/var/quarantine"
+
+# Metrics configuration
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+  # Metrics collection interval in seconds
+  interval_seconds: 10
+
+# Logging configuration
+logging:
+  # Log level: trace, debug, info, warn, error
+  level: info
+  # Log format: json, text
+  format: text
+  # Output: stdout, file
+  output: stdout
+  # File path (when output is file)
+  file_path: "/var/log/agent-gateway-enforcer.log"
+
+# UI configuration
+ui:
+  # UI type: web, native, none
+  type: web
+  # Web UI settings
+  web:
+    enabled: true
+    port: 8080
+    address: "127.0.0.1"
+  # Native UI settings (macOS/Windows)
+  native:
+    enabled: false
+    show_menu_bar: true
+    show_notifications: true
+
+# Agent configurations (applications being enforced)
+agents:
+  - name: "production-agent"
+    description: "Production AI agent"
+    enabled: true
+    # Process matching
+    process:
+      names:
+        - "agent-app"
+      paths:
+        - "/usr/local/bin/agent-app"
+    # Agent-specific gateway overrides
+    gateways:
+      - "api.openai.com:443"
+      - "api.anthropic.com:443"
+    # Agent-specific file access overrides
+    file_access:
+      allowed_paths:
+        - "/home/agent/data/*"
+
+  - name: "development-agent"
+    description: "Development/testing agent"
+    enabled: false
+    process:
+      names:
+        - "agent-dev"
+    gateways:
+      - "localhost:*"
+      - "127.0.0.1:*"

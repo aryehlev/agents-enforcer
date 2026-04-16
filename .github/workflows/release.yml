@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ==========================================================================
+  # Build release binaries
+  # ==========================================================================
+
+  build:
+    name: Build Release Binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+
+      - name: Build eBPF program
+        run: cargo xtask build-ebpf --release
+        env:
+          CARGO_CFG_BPF_TARGET_ARCH: x86_64
+
+      - name: Build userspace daemon
+        run: cargo build --package agent-gateway-enforcer --release
+
+      - name: Create release archive
+        run: |
+          mkdir -p release
+          cp target/release/agent-gateway-enforcer release/
+          cp target/bpf/agent-gateway-enforcer.bpf.o release/ || true
+          cp README.md release/
+          cp LICENSE release/ || true
+          tar -czvf agent-gateway-enforcer-linux-x86_64.tar.gz -C release .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binary
+          path: agent-gateway-enforcer-linux-x86_64.tar.gz
+
+  # ==========================================================================
+  # Build and push Docker image
+  # ==========================================================================
+
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==========================================================================
+  # Create GitHub Release
+  # ==========================================================================
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, docker]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-binary
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          else
+            CHANGES=$(git log --pretty=format:"- %s" --no-merges -20)
+          fi
+          echo "CHANGES<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: agent-gateway-enforcer-linux-x86_64.tar.gz
+          body: |
+            ## Agent Gateway Enforcer ${{ github.ref_name }}
+
+            ### Installation
+
+            **Binary:**
+            ```bash
+            tar -xzf agent-gateway-enforcer-linux-x86_64.tar.gz
+            sudo ./agent-gateway-enforcer run --gateway 10.0.0.1:8080
+            ```
+
+            **Docker:**
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            docker run --privileged ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} \
+              run --gateway 10.0.0.1:8080
+            ```
+
+            **Helm:**
+            ```bash
+            helm install agent-gateway-enforcer ./deploy/helm/agent-gateway-enforcer \
+              --set image.tag=${{ github.ref_name }} \
+              --set gateways[0]=10.0.0.1:8080
+            ```
+
+            ### Changes
+            ${{ steps.changelog.outputs.CHANGES }}
+
+            ### Requirements
+            - Linux kernel 5.8+
+            - Privileged access or CAP_BPF + CAP_SYS_ADMIN
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # ==========================================================================
+  # Publish Helm chart to GitHub Pages
+  # ==========================================================================
+
+  helm:
+    name: Publish Helm Chart
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Update Chart version
+        run: |
+          VERSION=${{ github.ref_name }}
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+          sed -i "s/^version:.*/version: $VERSION/" deploy/helm/agent-gateway-enforcer/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" deploy/helm/agent-gateway-enforcer/Chart.yaml
+
+      - name: Package Helm chart
+        run: |
+          helm package deploy/helm/agent-gateway-enforcer -d .helm-releases
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Create gh-pages if not exists
+        run: |
+          if [ ! -d "gh-pages" ]; then
+            mkdir gh-pages
+            cd gh-pages
+            git init
+            git checkout -b gh-pages
+          fi
+
+      - name: Update Helm repo
+        run: |
+          cp .helm-releases/*.tgz gh-pages/
+          cd gh-pages
+          helm repo index . --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+
+      - name: Push to gh-pages
+        run: |
+          cd gh-pages
+          git add .
+          git commit -m "Update Helm chart for ${{ github.ref_name }}" || exit 0
+          git push origin gh-pages --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
