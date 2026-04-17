@@ -16,9 +16,14 @@
 #define MAX_PATH_LEN 256
 #define MAX_COMM_LEN 16
 
+// How many entries the exec allowlist can hold (path-based).
+#define MAX_EXEC_ALLOW 32
+
 // Event types for userspace
-#define EVENT_FILE_OPEN 1
+#define EVENT_FILE_OPEN    1
 #define EVENT_FILE_BLOCKED 2
+#define EVENT_EXEC_BLOCKED 3
+#define EVENT_PATH_BLOCKED 4
 
 // Structure for blocked process names
 struct blocked_process {
@@ -57,10 +62,11 @@ struct {
     __type(value, struct blocked_path);
 } blocked_paths SEC(".maps");
 
-// Map: configuration flags
+// Map: configuration flags. Key/slot numbers are the CONFIG_* constants
+// below; keep max_entries one past the highest slot.
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 4);
+    __uint(max_entries, 8);
     __type(key, __u32);
     __type(value, __u32);
 } config SEC(".maps");
@@ -72,10 +78,28 @@ struct {
 } events SEC(".maps");
 
 // Configuration keys
-#define CONFIG_ENABLED 0
-#define CONFIG_BLOCK_ALL_PATHS 1
-#define CONFIG_NUM_BLOCKED_PROCS 2
-#define CONFIG_NUM_BLOCKED_PATHS 3
+#define CONFIG_ENABLED            0
+#define CONFIG_BLOCK_ALL_PATHS    1
+#define CONFIG_NUM_BLOCKED_PROCS  2
+#define CONFIG_NUM_BLOCKED_PATHS  3
+// When set, bprm_check_security denies any exec whose path isn't in
+// exec_allowlist. Blocked-process filter is applied independently.
+#define CONFIG_EXEC_ALLOWLIST_ON  4
+#define CONFIG_NUM_EXEC_ALLOW     5
+// When set, path-mutation hooks (unlink/mkdir/rmdir) deny all ops from
+// blocked processes. Kept separate from file_open gating because a
+// caller may want to observe reads without gating mutations, or vice versa.
+#define CONFIG_BLOCK_MUTATIONS    6
+
+// Exec allowlist entries use the same layout as blocked_path: a
+// null-terminated prefix plus length. Prefix semantics mean entries
+// like "/usr/bin/" trivially allow every binary under that directory.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, MAX_EXEC_ALLOW);
+    __type(key, __u32);
+    __type(value, struct blocked_path);
+} exec_allowlist SEC(".maps");
 
 // Helper: Check if current process name matches a blocked process
 static __always_inline int is_blocked_process(char *comm) {
@@ -263,6 +287,119 @@ int BPF_PROG(file_permission_block, struct file *file, int mask) {
     }
 
     return 0;
+}
+
+// -------------------------------------------------------------------
+// Exec allowlist: bprm_check_security runs for every execve() and lets
+// us deny unauthorized binaries before the new image is loaded. Kept
+// separate from file_open so a blocked agent can still read its own
+// assets but cannot spawn /bin/sh or a downloaded payload.
+// -------------------------------------------------------------------
+
+static __always_inline int exec_path_allowed(const char *path) {
+    __u32 key = CONFIG_NUM_EXEC_ALLOW;
+    __u32 *n = bpf_map_lookup_elem(&config, &key);
+    if (!n || *n == 0)
+        return 0; // nothing allowlisted => nothing allowed
+
+    #pragma unroll
+    for (__u32 i = 0; i < MAX_EXEC_ALLOW; i++) {
+        if (i >= *n)
+            break;
+        struct blocked_path *entry = bpf_map_lookup_elem(&exec_allowlist, &i);
+        if (!entry || entry->len == 0)
+            continue;
+
+        int match = 1;
+        #pragma unroll
+        for (__u32 j = 0; j < MAX_PATH_LEN && j < entry->len; j++) {
+            if (entry->path[j] == '\0')
+                break;
+            char c;
+            bpf_probe_read_kernel(&c, 1, &path[j]);
+            if (c != entry->path[j]) {
+                match = 0;
+                break;
+            }
+        }
+        if (match)
+            return 1;
+    }
+    return 0;
+}
+
+SEC("lsm/bprm_check_security")
+int BPF_PROG(bprm_check_exec, struct linux_binprm *bprm) {
+    __u32 key = CONFIG_ENABLED;
+    __u32 *enabled = bpf_map_lookup_elem(&config, &key);
+    if (!enabled || !*enabled)
+        return 0;
+
+    key = CONFIG_EXEC_ALLOWLIST_ON;
+    __u32 *on = bpf_map_lookup_elem(&config, &key);
+    if (!on || !*on)
+        return 0; // allowlist disabled -> trust existing LSMs
+
+    // Pull the path being exec'd from bprm->filename.
+    const char *filename = NULL;
+    bpf_probe_read_kernel(&filename, sizeof(filename), &bprm->filename);
+    if (!filename)
+        return 0;
+
+    if (exec_path_allowed(filename))
+        return 0;
+
+    __u32 pid = bpf_get_current_pid_tgid() >> 32;
+    __u32 uid = bpf_get_current_uid_gid() & 0xFFFFFFFF;
+    char comm[MAX_COMM_LEN];
+    bpf_get_current_comm(comm, sizeof(comm));
+    send_event(EVENT_EXEC_BLOCKED, pid, uid, comm, filename, -1);
+    return -EPERM;
+}
+
+// -------------------------------------------------------------------
+// Path-mutation hooks: block unlink/mkdir/rmdir for denied processes
+// when CONFIG_BLOCK_MUTATIONS is enabled. We intentionally do not
+// inspect the target path here (it's expensive and complicates the
+// verifier); the per-process allowlist in the caller side is the
+// appropriate place for fine-grained decisions.
+// -------------------------------------------------------------------
+
+static __always_inline int deny_mutation_for_blocked(const char *op_tag) {
+    __u32 key = CONFIG_ENABLED;
+    __u32 *enabled = bpf_map_lookup_elem(&config, &key);
+    if (!enabled || !*enabled)
+        return 0;
+
+    key = CONFIG_BLOCK_MUTATIONS;
+    __u32 *mutate = bpf_map_lookup_elem(&config, &key);
+    if (!mutate || !*mutate)
+        return 0;
+
+    char comm[MAX_COMM_LEN];
+    bpf_get_current_comm(comm, sizeof(comm));
+    if (!is_blocked_process(comm))
+        return 0;
+
+    __u32 pid = bpf_get_current_pid_tgid() >> 32;
+    __u32 uid = bpf_get_current_uid_gid() & 0xFFFFFFFF;
+    send_event(EVENT_PATH_BLOCKED, pid, uid, comm, op_tag, -1);
+    return -EPERM;
+}
+
+SEC("lsm/path_unlink")
+int BPF_PROG(path_unlink_block, const struct path *dir, struct dentry *dentry) {
+    return deny_mutation_for_blocked("unlink");
+}
+
+SEC("lsm/path_mkdir")
+int BPF_PROG(path_mkdir_block, const struct path *dir, struct dentry *dentry, umode_t mode) {
+    return deny_mutation_for_blocked("mkdir");
+}
+
+SEC("lsm/path_rmdir")
+int BPF_PROG(path_rmdir_block, const struct path *dir, struct dentry *dentry) {
+    return deny_mutation_for_blocked("rmdir");
 }
 
 char LICENSE[] SEC("license") = "MIT";
