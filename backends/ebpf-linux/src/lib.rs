@@ -11,9 +11,10 @@
 
 use agent_gateway_enforcer_core::backend::{
     BackendCapabilities, BackendHealth, BackendType, EnforcementBackend, EventHandler,
-    FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector, Platform, Result,
-    UnifiedConfig,
+    FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector, Platform, PodIdentity,
+    PolicyBundle, PolicyHash, Result, UnifiedConfig,
 };
+use std::collections::{HashMap, HashSet};
 use agent_gateway_enforcer_core::events::{
     EventSource, FileAccessType, FileAction, NetworkAction, NetworkProtocol, UnifiedEvent,
 };
@@ -94,6 +95,27 @@ pub struct EbpfLinuxBackend {
     event_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Internal metrics storage
     metrics: Arc<EbpfMetrics>,
+    /// Per-pod enforcement registry (see `pod_registry` for details).
+    pod_registry: Arc<Mutex<PodRegistry>>,
+}
+
+/// Tracks which pods are attached to which compiled policy bundle.
+///
+/// Until `BPF_MAP_TYPE_HASH_OF_MAPS` per-cgroup indexing lands (see
+/// docs/k8s-controller-plan.md §4.2), this backend uses shared maps:
+/// `attach_pod` reprograms them with the referenced bundle. Multiple
+/// distinct bundles active simultaneously produce a warning and a
+/// last-attach-wins outcome, and the registry surfaces that in logs
+/// so the controller can detect the collision.
+#[derive(Default)]
+struct PodRegistry {
+    /// Bundles known to the node, keyed by their hash.
+    bundles: HashMap<PolicyHash, PolicyBundle>,
+    /// pod UID -> hash currently enforcing it.
+    attached: HashMap<String, PolicyHash>,
+    /// Bundle hashes that have at least one attached pod. Used to
+    /// drop unused bundles on detach without walking `attached`.
+    active_hashes: HashSet<PolicyHash>,
 }
 
 /// eBPF program state (Linux only)
@@ -237,6 +259,7 @@ impl EbpfLinuxBackend {
             event_sender: Arc::new(Mutex::new(None)),
             event_task: Arc::new(Mutex::new(None)),
             metrics,
+            pod_registry: Arc::new(Mutex::new(PodRegistry::default())),
         }
     }
 
@@ -1042,6 +1065,101 @@ impl EnforcementBackend for EbpfLinuxBackend {
 
         Ok(())
     }
+
+    async fn update_policy(&self, bundle: &PolicyBundle) -> Result<()> {
+        let mut reg = self
+            .pod_registry
+            .lock()
+            .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+        tracing::info!(
+            "Staging policy bundle {} ({} gateways, {} exec rules)",
+            bundle.hash.as_str(),
+            bundle.gateways.len(),
+            bundle.exec_allowlist.len()
+        );
+        reg.bundles.insert(bundle.hash.clone(), bundle.clone());
+        Ok(())
+    }
+
+    async fn attach_pod(&self, pod: &PodIdentity, policy_hash: &PolicyHash) -> Result<()> {
+        // Stage the assignment in the registry first so a concurrent
+        // update_policy() can see what's referenced and refcount correctly.
+        let bundle = {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+
+            let bundle = reg
+                .bundles
+                .get(policy_hash)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "attach_pod: bundle {} not staged; call update_policy first",
+                        policy_hash.as_str()
+                    )
+                })?
+                .clone();
+
+            // Idempotent: re-attaching the same (pod, hash) is a no-op.
+            if let Some(existing) = reg.attached.get(&pod.uid) {
+                if existing == policy_hash {
+                    return Ok(());
+                }
+                tracing::info!(
+                    "Pod {} reassigned from bundle {} to {}",
+                    pod.uid,
+                    existing.as_str(),
+                    policy_hash.as_str()
+                );
+            }
+            reg.attached.insert(pod.uid.clone(), policy_hash.clone());
+            reg.active_hashes.insert(policy_hash.clone());
+
+            if reg.active_hashes.len() > 1 {
+                tracing::warn!(
+                    "{} distinct bundles active simultaneously; shared-map mode is last-attach-wins until HASH_OF_MAPS lands",
+                    reg.active_hashes.len()
+                );
+            }
+            bundle
+        };
+
+        // Program the shared maps from this bundle. Per-cgroup attach is
+        // tracked in docs/k8s-controller-plan.md §4.2 as the next step.
+        self.configure_gateways(&bundle.gateways).await?;
+        self.configure_file_access(&bundle.file_access).await?;
+        tracing::info!(
+            "Pod {}/{} ({}) now enforcing bundle {}",
+            pod.namespace,
+            pod.name,
+            pod.uid,
+            policy_hash.as_str()
+        );
+        Ok(())
+    }
+
+    async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
+        let mut reg = self
+            .pod_registry
+            .lock()
+            .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+        let Some(hash) = reg.attached.remove(&pod.uid) else {
+            tracing::debug!("detach_pod: {} not attached (already gone?)", pod.uid);
+            return Ok(());
+        };
+        // Drop the active-hash entry only if this was the last pod on it.
+        let still_referenced = reg.attached.values().any(|h| h == &hash);
+        if !still_referenced {
+            reg.active_hashes.remove(&hash);
+            tracing::info!(
+                "Bundle {} no longer referenced; will GC on next update_policy",
+                hash.as_str()
+            );
+        }
+        tracing::info!("Pod {}/{} detached", pod.namespace, pod.name);
+        Ok(())
+    }
 }
 
 // Public modules
@@ -1342,5 +1460,95 @@ mod tests {
             .collect();
         let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&many);
         assert_eq!(entries.len(), MAX_EXEC_ALLOW_ENTRIES);
+    }
+
+    fn sample_pod(uid: &str) -> PodIdentity {
+        PodIdentity {
+            uid: uid.into(),
+            namespace: "prod".into(),
+            name: format!("agent-{}", uid),
+            cgroup_path: format!("/sys/fs/cgroup/kubepods.slice/{}", uid),
+        }
+    }
+
+    fn sample_bundle(hash: &str) -> PolicyBundle {
+        PolicyBundle {
+            hash: PolicyHash::new(hash),
+            gateways: vec![GatewayConfig {
+                address: "10.0.0.1".into(),
+                port: 443,
+                enabled: true,
+                description: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_pod_requires_staged_bundle() {
+        let backend = EbpfLinuxBackend::new();
+        let err = backend
+            .attach_pod(&sample_pod("p1"), &PolicyHash::new("missing"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not staged"));
+    }
+
+    #[tokio::test]
+    async fn attach_pod_records_binding_and_refcounts_on_detach() {
+        let mut backend = EbpfLinuxBackend::new();
+        backend
+            .initialize(&UnifiedConfig::default())
+            .await
+            .unwrap();
+
+        let bundle = sample_bundle("h1");
+        backend.update_policy(&bundle).await.unwrap();
+
+        backend.attach_pod(&sample_pod("p1"), &bundle.hash).await.unwrap();
+        backend.attach_pod(&sample_pod("p2"), &bundle.hash).await.unwrap();
+
+        {
+            let reg = backend.pod_registry.lock().unwrap();
+            assert_eq!(reg.attached.len(), 2);
+            assert_eq!(reg.active_hashes.len(), 1);
+        }
+
+        backend.detach_pod(&sample_pod("p1")).await.unwrap();
+        {
+            let reg = backend.pod_registry.lock().unwrap();
+            assert_eq!(reg.attached.len(), 1);
+            // Still referenced by p2.
+            assert!(reg.active_hashes.contains(&bundle.hash));
+        }
+
+        backend.detach_pod(&sample_pod("p2")).await.unwrap();
+        {
+            let reg = backend.pod_registry.lock().unwrap();
+            assert!(reg.attached.is_empty());
+            assert!(reg.active_hashes.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_pod_is_idempotent() {
+        let mut backend = EbpfLinuxBackend::new();
+        backend
+            .initialize(&UnifiedConfig::default())
+            .await
+            .unwrap();
+        let bundle = sample_bundle("h2");
+        backend.update_policy(&bundle).await.unwrap();
+        backend.attach_pod(&sample_pod("p1"), &bundle.hash).await.unwrap();
+        backend.attach_pod(&sample_pod("p1"), &bundle.hash).await.unwrap();
+
+        let reg = backend.pod_registry.lock().unwrap();
+        assert_eq!(reg.attached.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn detach_unknown_pod_is_ok() {
+        let backend = EbpfLinuxBackend::new();
+        backend.detach_pod(&sample_pod("ghost")).await.unwrap();
     }
 }

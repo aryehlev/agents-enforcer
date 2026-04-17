@@ -105,7 +105,7 @@ impl Default for BackendHealth {
 }
 
 /// Gateway configuration for network filtering
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// Gateway address (IPv4 or IPv6)
     pub address: String,
@@ -118,7 +118,7 @@ pub struct GatewayConfig {
 }
 
 /// File access control configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileAccessConfig {
     /// List of allowed file paths (prefix matching)
     pub allowed_paths: Vec<String>,
@@ -158,6 +158,80 @@ impl Default for UnifiedConfig {
             gateways: Vec::new(),
             file_access: FileAccessConfig::default(),
             backend_settings: serde_json::Value::Null,
+        }
+    }
+}
+
+/// Identity of a pod being enforced.
+///
+/// Kubernetes pods are identified by UID globally and namespace/name for
+/// humans; the cgroup v2 path is what we actually attach eBPF programs to.
+/// All three are carried explicitly so the controller side doesn't have
+/// to re-derive them from the kubelet, and so logs / events are always
+/// attributable without an extra lookup.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PodIdentity {
+    /// Kubernetes pod UID (e.g. "550e8400-e29b-41d4-a716-446655440000").
+    pub uid: String,
+    /// Pod namespace.
+    pub namespace: String,
+    /// Pod name.
+    pub name: String,
+    /// Absolute cgroup v2 path the node agent should attach to,
+    /// e.g. `/sys/fs/cgroup/kubepods.slice/.../pod<uid>`.
+    pub cgroup_path: String,
+}
+
+/// Content hash of a compiled policy bundle.
+///
+/// Node agents deduplicate programming by hash — two pods with the same
+/// `PolicyHash` share the same eBPF map contents, so we only pay the
+/// upload cost once per distinct policy.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PolicyHash(pub String);
+
+impl PolicyHash {
+    /// Construct from a hex-encoded sha256 string.
+    pub fn new(hex: impl Into<String>) -> Self {
+        Self(hex.into())
+    }
+
+    /// Access the raw hex representation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Compiled, node-ready policy ready to be programmed into eBPF maps.
+///
+/// This is intentionally flat rather than nested like `AgentPolicy` CRDs:
+/// the controller does the CR → bundle compilation (DNS resolution,
+/// catalog expansion, conflict resolution), nodes only see the result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyBundle {
+    /// Hash identifying this exact bundle. Must match
+    /// `sha256(bincode::serialize(&bundle_without_hash))` so nodes can
+    /// verify what they received.
+    pub hash: PolicyHash,
+    /// Egress gateways. Empty means default-deny egress.
+    pub gateways: Vec<GatewayConfig>,
+    /// File access rules.
+    pub file_access: FileAccessConfig,
+    /// Exec-allowlist paths (prefix match). Empty = exec allowlist disabled.
+    pub exec_allowlist: Vec<String>,
+    /// When true, block path mutations (unlink/mkdir/rmdir) from
+    /// processes matched by `blocked_processes`.
+    pub block_mutations: bool,
+}
+
+impl Default for PolicyBundle {
+    fn default() -> Self {
+        Self {
+            hash: PolicyHash::new(""),
+            gateways: Vec::new(),
+            file_access: FileAccessConfig::default(),
+            exec_allowlist: Vec::new(),
+            block_mutations: false,
         }
     }
 }
@@ -248,6 +322,48 @@ pub trait EnforcementBackend: Send + Sync {
     /// After calling this method, the backend must be re-initialized
     /// before it can be used again.
     async fn cleanup(&mut self) -> Result<()>;
+
+    /// Attach enforcement to a specific pod's cgroup.
+    ///
+    /// The controller calls this when a matching pod is scheduled on
+    /// this node. Idempotent: attaching the same (pod, policy_hash)
+    /// twice must be a no-op. Returning an error leaves the pod
+    /// unenforced and the controller will mark the policy `Degraded`.
+    ///
+    /// The default implementation returns "unsupported" so existing
+    /// single-tenant backends keep compiling; per-pod support is
+    /// declared via `BackendCapabilities::per_pod_enforcement` in a
+    /// later change.
+    async fn attach_pod(&self, _pod: &PodIdentity, _policy_hash: &PolicyHash) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "attach_pod is not supported by this backend"
+        ))
+    }
+
+    /// Detach enforcement from a pod's cgroup.
+    ///
+    /// Called when the pod terminates or the policy selector stops
+    /// matching. Must tolerate being called for a pod that was never
+    /// attached (no-op in that case) — pod lifecycle races are the
+    /// norm, not the exception.
+    async fn detach_pod(&self, _pod: &PodIdentity) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "detach_pod is not supported by this backend"
+        ))
+    }
+
+    /// Install or update a compiled policy bundle, keyed by its hash.
+    ///
+    /// After this returns, the backend has the bundle's rules staged
+    /// and ready to be used by subsequent `attach_pod` calls that
+    /// reference the same hash. Implementations should keep a bundle
+    /// alive as long as any attached pod references it, and drop it
+    /// once the last reference detaches.
+    async fn update_policy(&self, _bundle: &PolicyBundle) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "update_policy is not supported by this backend"
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -320,5 +436,93 @@ mod tests {
         assert!(!config.default_deny);
         assert!(config.allowed_paths.is_empty());
         assert!(config.denied_paths.is_empty());
+    }
+
+    #[test]
+    fn pod_identity_is_hashable_and_equatable() {
+        use std::collections::HashSet;
+        let a = PodIdentity {
+            uid: "abc".into(),
+            namespace: "prod".into(),
+            name: "agent-0".into(),
+            cgroup_path: "/sys/fs/cgroup/kubepods.slice/abc".into(),
+        };
+        let b = a.clone();
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b), "same UID -> same bucket");
+    }
+
+    #[test]
+    fn policy_hash_round_trips_as_string() {
+        let h = PolicyHash::new("deadbeef");
+        assert_eq!(h.as_str(), "deadbeef");
+        let json = serde_json::to_string(&h).unwrap();
+        let back: PolicyHash = serde_json::from_str(&json).unwrap();
+        assert_eq!(h, back);
+    }
+
+    #[test]
+    fn policy_bundle_default_is_empty() {
+        let b = PolicyBundle::default();
+        assert!(b.gateways.is_empty());
+        assert!(b.exec_allowlist.is_empty());
+        assert!(!b.block_mutations);
+        assert_eq!(b.hash.as_str(), "");
+    }
+
+    #[tokio::test]
+    async fn trait_default_pod_methods_return_unsupported() {
+        struct Noop;
+        #[async_trait]
+        impl EnforcementBackend for Noop {
+            fn backend_type(&self) -> BackendType {
+                BackendType::Auto
+            }
+            fn platform(&self) -> Platform {
+                Platform::Linux
+            }
+            fn capabilities(&self) -> BackendCapabilities {
+                BackendCapabilities::default()
+            }
+            async fn initialize(&mut self, _: &UnifiedConfig) -> Result<()> {
+                Ok(())
+            }
+            async fn start(&mut self) -> Result<()> {
+                Ok(())
+            }
+            async fn stop(&mut self) -> Result<()> {
+                Ok(())
+            }
+            async fn configure_gateways(&self, _: &[GatewayConfig]) -> Result<()> {
+                Ok(())
+            }
+            async fn configure_file_access(&self, _: &FileAccessConfig) -> Result<()> {
+                Ok(())
+            }
+            fn metrics_collector(&self) -> Option<Arc<dyn MetricsCollector>> {
+                None
+            }
+            fn event_handler(&self) -> Option<Arc<dyn EventHandler>> {
+                None
+            }
+            async fn health_check(&self) -> Result<BackendHealth> {
+                Ok(BackendHealth::default())
+            }
+            async fn cleanup(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let b = Noop;
+        let pod = PodIdentity {
+            uid: "u".into(),
+            namespace: "n".into(),
+            name: "p".into(),
+            cgroup_path: "/c".into(),
+        };
+        assert!(b.attach_pod(&pod, &PolicyHash::new("h")).await.is_err());
+        assert!(b.detach_pod(&pod).await.is_err());
+        assert!(b.update_policy(&PolicyBundle::default()).await.is_err());
     }
 }
