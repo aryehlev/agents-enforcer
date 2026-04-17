@@ -1,0 +1,29 @@
+[package]
+name = "agent-gateway-enforcer-controller"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "Kubernetes controller + CRD types for agent gateway enforcement"
+license = "MIT"
+
+[dependencies]
+agent-gateway-enforcer-core = { path = "../agent-gateway-enforcer-core" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Kubernetes
+kube = { workspace = true }
+k8s-openapi = { workspace = true }
+schemars = { workspace = true }
+
+# SHA-256 for PolicyBundle hash derivation.
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true }

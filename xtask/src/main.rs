@@ -20,6 +20,15 @@ enum Subcommand {
     BuildAll(BuildOptions),
     /// Run the userspace program
     Run(RunOptions),
+    /// Generate CRD YAML manifests into deploy/crds/
+    GenCrds(GenCrdsOptions),
+}
+
+#[derive(Debug, Parser)]
+struct GenCrdsOptions {
+    /// Output directory (defaults to <repo>/deploy/crds)
+    #[clap(long)]
+    out_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -59,7 +68,38 @@ fn main() -> Result<()> {
             build_userspace(opts)
         }
         Subcommand::Run(opts) => run(opts),
+        Subcommand::GenCrds(opts) => gen_crds(opts),
     }
+}
+
+/// Write one YAML file per CRD into `deploy/crds/`. Paired with the
+/// in-tree tests (see `agent-gateway-enforcer-controller` tests) that
+/// verify the CRD definitions round-trip; this task just materializes
+/// them to disk so `kubectl apply -f deploy/crds/` works without the
+/// controller running.
+fn gen_crds(opts: GenCrdsOptions) -> Result<()> {
+    use agent_gateway_enforcer_controller::{AgentPolicy, EnforcerConfig, GatewayCatalog};
+    use kube::CustomResourceExt;
+
+    let out_dir = opts
+        .out_dir
+        .unwrap_or_else(|| project_root().join("deploy").join("crds"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("create {}", out_dir.display()))?;
+
+    let crds: [(&str, serde_yaml::Value); 3] = [
+        ("agentpolicies.agents.enforcer.io.yaml", serde_yaml::to_value(AgentPolicy::crd())?),
+        ("gatewaycatalogs.agents.enforcer.io.yaml", serde_yaml::to_value(GatewayCatalog::crd())?),
+        ("enforcerconfigs.agents.enforcer.io.yaml", serde_yaml::to_value(EnforcerConfig::crd())?),
+    ];
+
+    for (name, value) in crds {
+        let path = out_dir.join(name);
+        let yaml = serde_yaml::to_string(&value)?;
+        std::fs::write(&path, yaml).with_context(|| format!("write {}", path.display()))?;
+        println!("wrote {}", path.display());
+    }
+    Ok(())
 }
 
 fn build_ebpf(opts: BuildEbpfOptions) -> Result<()> {

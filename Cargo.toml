@@ -4,6 +4,7 @@ members = [
     "agent-gateway-enforcer-core",
     "agent-gateway-enforcer-cli",
     "agent-gateway-enforcer-common",
+    "agent-gateway-enforcer-controller",
     "backends/ebpf-linux",
     "backends/macos-desktop",
     "agent-gateway-enforcer",         # Legacy compatibility shim
@@ -77,6 +78,11 @@ glob = "0.3"
 
 # Testing utilities
 tempfile = "3.8"
+
+# Kubernetes controller
+kube = { version = "0.87", default-features = false, features = ["client", "derive", "runtime", "rustls-tls"] }
+k8s-openapi = { version = "0.20", features = ["v1_28"] }
+schemars = "0.8"
 
 [profile.dev]
 opt-level = 0

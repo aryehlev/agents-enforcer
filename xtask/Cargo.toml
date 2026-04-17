@@ -7,3 +7,6 @@ description = "Build tooling for agent-gateway-enforcer"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+serde_yaml = { workspace = true }
+kube = { workspace = true }
+agent-gateway-enforcer-controller = { path = "../agent-gateway-enforcer-controller" }
