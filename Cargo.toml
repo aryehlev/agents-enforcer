@@ -6,6 +6,7 @@ members = [
     "agent-gateway-enforcer-common",
     "agent-gateway-enforcer-controller",
     "agent-gateway-enforcer-node-agent",
+    "agent-gateway-enforcer-webhook",
     "backends/ebpf-linux",
     "agent-gateway-enforcer",         # Legacy compatibility shim
     "xtask",
@@ -80,7 +81,7 @@ glob = "0.3"
 tempfile = "3.8"
 
 # Kubernetes controller
-kube = { version = "0.87", default-features = false, features = ["client", "derive", "runtime", "rustls-tls"] }
+kube = { version = "0.87", default-features = false, features = ["client", "derive", "runtime", "rustls-tls", "admission"] }
 k8s-openapi = { version = "0.20", features = ["v1_28"] }
 schemars = "0.8"
 

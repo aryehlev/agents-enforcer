@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use agent_gateway_enforcer_backend_ebpf_linux::EbpfLinuxBackend;
 use agent_gateway_enforcer_core::backend::{EnforcementBackend, UnifiedConfig};
-use agent_gateway_enforcer_node_agent::{server::NodeAgentService, NodeAgentServer};
+use agent_gateway_enforcer_node_agent::{
+    metrics::NODE_AGENT_UP, metrics_server, server::NodeAgentService, NodeAgentServer,
+};
 use anyhow::Context;
 use clap::Parser;
 use tonic::transport::Server;
@@ -24,6 +26,10 @@ struct Args {
     /// node's hostIP.
     #[arg(long, default_value = "0.0.0.0:9091")]
     listen: String,
+
+    /// Bind address for the Prometheus /metrics exporter.
+    #[arg(long, default_value = "0.0.0.0:9090")]
+    metrics_addr: std::net::SocketAddr,
 }
 
 #[tokio::main]
@@ -50,9 +56,24 @@ async fn main() -> anyhow::Result<()> {
         .listen
         .parse()
         .with_context(|| format!("invalid listen address {}", args.listen))?;
-    tracing::info!(%addr, "enforcer-node-agent listening");
+    tracing::info!(%addr, metrics = %args.metrics_addr, "enforcer-node-agent listening");
 
-    Server::builder()
+    // Mark ourselves up; a scrape after startup sees 1, a missing
+    // target (pod down) surfaces as `up == 0` or absent series.
+    let node = std::env::var("NODE_NAME").unwrap_or_else(|_| "unknown".into());
+    NODE_AGENT_UP.with_label_values(&[&node]).set(1);
+
+    // Run metrics + gRPC concurrently. Either failure takes the
+    // process down so kubelet restarts it.
+    let (metrics_stop_tx, metrics_stop_rx) = tokio::sync::oneshot::channel();
+    let metrics_task = tokio::spawn(async move {
+        let _ = metrics_server::serve(args.metrics_addr, async move {
+            let _ = metrics_stop_rx.await;
+        })
+        .await;
+    });
+
+    let grpc_result = Server::builder()
         .add_service(NodeAgentServer::new(NodeAgentService::new(backend)))
         .serve_with_shutdown(addr, async {
             // SIGTERM on DaemonSet eviction; tokio's ctrl_c covers
@@ -61,7 +82,10 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("shutdown signal received; draining");
         })
         .await
-        .context("serve")?;
+        .context("serve");
 
+    let _ = metrics_stop_tx.send(());
+    let _ = metrics_task.await;
+    grpc_result?;
     Ok(())
 }

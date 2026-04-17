@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_gateway_enforcer_controller::{
-    run, BundleDistributor, ControllerConfig, GrpcDistributor, LoggingDistributor,
+    metrics_server, run, BundleDistributor, ControllerConfig, GrpcDistributor, LoggingDistributor,
     StaticNodeEndpointResolver,
 };
 use anyhow::Context;
@@ -44,6 +44,13 @@ struct Args {
     /// Seconds between mandatory reconciles when nothing has changed.
     #[arg(long, default_value_t = 30)]
     requeue_seconds: u64,
+
+    /// Bind address for the Prometheus /metrics exporter. Prometheus,
+    /// VictoriaMetrics vmagent, Grafana Mimir, Thanos, Cortex all
+    /// scrape this endpoint directly — no OTLP metrics pipeline
+    /// needed.
+    #[arg(long, default_value = "0.0.0.0:9090")]
+    metrics_addr: std::net::SocketAddr,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -89,7 +96,22 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         requeue_s = args.requeue_seconds,
         cgroup_template = %config.cgroup_template,
+        metrics_addr = %args.metrics_addr,
         "starting enforcer-controller"
     );
-    run(client, distributor, config).await
+
+    // Run the controller and the metrics server concurrently. A
+    // failure in either takes the process down — kubelet restarts
+    // us, which is the correct behavior for a control-plane pod.
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let metrics_task = tokio::spawn(async move {
+        let _ = metrics_server::serve(args.metrics_addr, async move {
+            let _ = stop_rx.await;
+        })
+        .await;
+    });
+    let result = run(client, distributor, config).await;
+    let _ = stop_tx.send(());
+    let _ = metrics_task.await;
+    result
 }

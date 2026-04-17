@@ -8,5 +8,6 @@ description = "Build tooling for agent-gateway-enforcer"
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde_yaml = { workspace = true }
+serde_json = { workspace = true }
 kube = { workspace = true }
 agent-gateway-enforcer-controller = { path = "../agent-gateway-enforcer-controller" }

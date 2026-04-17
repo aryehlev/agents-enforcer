@@ -26,6 +26,9 @@ tonic = "0.10"
 prost = "0.12"
 clap = { workspace = true }
 tokio-stream = "0.1"
+prometheus = { workspace = true }
+once_cell = "1.19"
+axum = { workspace = true }
 
 [build-dependencies]
 tonic-build = "0.10"

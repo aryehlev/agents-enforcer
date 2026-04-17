@@ -21,6 +21,9 @@ pub mod proto {
 
 mod conversions;
 
+pub mod metrics;
+pub mod metrics_server;
+
 pub use conversions::{bundle_from_proto, bundle_to_proto, pod_from_proto, pod_to_proto};
 pub use proto::{
     node_agent_client::NodeAgentClient, node_agent_server::NodeAgentServer, AttachPodRequest,

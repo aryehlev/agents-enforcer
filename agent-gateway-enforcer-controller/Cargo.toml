@@ -15,6 +15,7 @@ agent-gateway-enforcer-node-agent = { path = "../agent-gateway-enforcer-node-age
 tonic = "0.10"
 prometheus = { workspace = true }
 once_cell = "1.19"
+axum = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -45,3 +46,4 @@ path = "src/bin/controller.rs"
 tokio = { workspace = true }
 tempfile = { workspace = true }
 agent-gateway-enforcer-backend-ebpf-linux = { path = "../backends/ebpf-linux" }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"] }

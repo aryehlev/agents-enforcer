@@ -81,3 +81,33 @@ rbac:
 # CRD upgrades.
 crds:
   install: true
+
+# -------------- Admission webhook -----------
+webhook:
+  enabled: true
+  image:
+    repository: ghcr.io/aryehlev/agents-enforcer-webhook
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 2                      # small but HA — webhook is on the apply path
+  listenPort: 8443
+  resources:
+    limits:   { cpu: 500m, memory: 256Mi }
+    requests: { cpu: 50m,  memory: 64Mi  }
+  # failurePolicy Fail blocks apply on webhook outage. Flip to
+  # Ignore for bring-up, then back to Fail once the webhook is
+  # demonstrably reliable.
+  failurePolicy: Fail
+  timeoutSeconds: 5
+  # Cert management. Set certManager.enabled=false if you're
+  # already providing a Secret named `webhook.tlsSecret`.
+  certManager:
+    enabled: true
+    issuerKind: Issuer                 # or ClusterIssuer
+    issuerName: ""                     # empty -> chart creates a selfsigned Issuer
+  tlsSecret: agents-enforcer-webhook-tls
+  podAnnotations: {}
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations: []
+  affinity: {}

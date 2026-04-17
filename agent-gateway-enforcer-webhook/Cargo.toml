@@ -1,0 +1,31 @@
+[package]
+name = "agent-gateway-enforcer-webhook"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "Admission webhook for agents.enforcer.io CRDs"
+license = "MIT"
+
+[dependencies]
+agent-gateway-enforcer-core = { path = "../agent-gateway-enforcer-core" }
+agent-gateway-enforcer-controller = { path = "../agent-gateway-enforcer-controller" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+clap = { workspace = true }
+kube = { workspace = true }
+k8s-openapi = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true }
+
+[[bin]]
+name = "enforcer-webhook"
+path = "src/bin/webhook.rs"

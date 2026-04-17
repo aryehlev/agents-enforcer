@@ -1,0 +1,40 @@
+{{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled -}}
+{{- /*
+  When issuerName is empty we create a self-signed Issuer so the
+  chart works in clusters that only have cert-manager installed
+  (no PKI). Users running a real PKI set .issuerName to their
+  Issuer/ClusterIssuer and we skip the selfsigned bootstrap.
+*/ -}}
+{{- if not .Values.webhook.certManager.issuerName }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "agents-enforcer.fullname" . }}-selfsigned
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "agents-enforcer.fullname" . }}-webhook
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.webhook.tlsSecret }}
+  duration: 8760h       # 1 year; cert-manager rotates before expiry
+  renewBefore: 720h     # 30 days
+  subject:
+    organizations: ["agents-enforcer"]
+  dnsNames:
+    # Match ClientConfig.service in the webhook config below.
+    - {{ include "agents-enforcer.fullname" . }}-webhook.{{ .Values.namespace }}.svc
+    - {{ include "agents-enforcer.fullname" . }}-webhook.{{ .Values.namespace }}.svc.cluster.local
+  issuerRef:
+    kind: {{ .Values.webhook.certManager.issuerKind }}
+    name: {{ .Values.webhook.certManager.issuerName | default (printf "%s-selfsigned" (include "agents-enforcer.fullname" .)) }}
+{{- end }}

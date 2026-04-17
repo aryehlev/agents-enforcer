@@ -29,6 +29,7 @@ pub mod crds;
 pub mod distributor;
 pub mod matching;
 pub mod metrics;
+pub mod metrics_server;
 pub mod reconciler;
 pub mod state;
 
