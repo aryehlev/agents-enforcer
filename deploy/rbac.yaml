@@ -1,0 +1,52 @@
+---
+# Minimum RBAC for the enforcer-controller ServiceAccount.
+#
+# - `agents.enforcer.io/*`: full control on our own CRs (status
+#   subresource is listed explicitly).
+# - `pods`, `namespaces`: read-only; we only watch pod metadata for
+#   policy matching and never mutate them.
+# - `events`: create/patch so the controller can surface critical
+#   state transitions via `kubectl get events` (Phase D.3).
+# - `coordination.k8s.io/leases`: for leader election when we ship
+#   the HA 2-replica deployment. Required today by kube-rs even for
+#   single-replica runs if you enable the leader module.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: enforcer-controller
+  namespace: enforcer-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: enforcer-controller
+rules:
+  - apiGroups: ["agents.enforcer.io"]
+    resources:
+      - agentpolicies
+      - agentpolicies/status
+      - gatewaycatalogs
+      - enforcerconfigs
+    verbs: ["get", "list", "watch", "patch", "update", "create"]
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: enforcer-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: enforcer-controller
+subjects:
+  - kind: ServiceAccount
+    name: enforcer-controller
+    namespace: enforcer-system

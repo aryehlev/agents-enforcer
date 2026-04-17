@@ -24,16 +24,20 @@
 #![warn(missing_docs)]
 
 pub mod compiler;
+pub mod controller;
 pub mod crds;
 pub mod distributor;
 pub mod matching;
 pub mod reconciler;
+pub mod state;
 
 pub use compiler::{compile_policy, CompileError};
+pub use controller::{error_policy, reconcile, run, Context, ControllerConfig, ReconcileLoopError};
 pub use crds::{
     AgentPolicy, AgentPolicySpec, AgentPolicyStatus, EnforcerConfig, EnforcerConfigSpec,
     GatewayCatalog, GatewayCatalogSpec, LabelSelector,
 };
-pub use distributor::{BundleDistributor, InMemoryDistributor};
+pub use distributor::{BundleDistributor, InMemoryDistributor, LoggingDistributor};
 pub use matching::{pod_identity_from, pod_matches_selector};
 pub use reconciler::{reconcile_policy, ReconcileError, ReconcileOutcome, ReconcileRequest};
+pub use state::{PolicyKey, PolicyStateStore};

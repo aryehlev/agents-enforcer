@@ -76,6 +76,53 @@ impl BundleDistributor for InMemoryDistributor {
     }
 }
 
+/// Dry-run distributor that only logs its inputs. Useful for
+/// bringing up the controller against a cluster you don't want to
+/// enforce on yet — every reconcile is observable through
+/// `kubectl describe agentpolicy` and the controller logs, but no
+/// pods are actually programmed.
+#[derive(Default)]
+pub struct LoggingDistributor;
+
+impl LoggingDistributor {
+    /// Construct a logging distributor. It's stateless; use it by value.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl BundleDistributor for LoggingDistributor {
+    async fn update_policy(&self, bundle: &PolicyBundle) -> Result<()> {
+        tracing::info!(
+            hash = bundle.hash.as_str(),
+            gateways = bundle.gateways.len(),
+            exec_rules = bundle.exec_allowlist.len(),
+            "dry-run: update_policy",
+        );
+        Ok(())
+    }
+
+    async fn attach_pod(&self, pod: &PodIdentity, bundle_hash: &PolicyHash) -> Result<()> {
+        tracing::info!(
+            pod = %format!("{}/{}", pod.namespace, pod.name),
+            uid = %pod.uid,
+            hash = bundle_hash.as_str(),
+            "dry-run: attach_pod",
+        );
+        Ok(())
+    }
+
+    async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
+        tracing::info!(
+            pod = %format!("{}/{}", pod.namespace, pod.name),
+            uid = %pod.uid,
+            "dry-run: detach_pod",
+        );
+        Ok(())
+    }
+}
+
 /// Test-only helpers. Lives under `pub(crate)` so the reconciler
 /// tests can pull the `RecordingDistributor` in without re-deriving
 /// the trait plumbing.
@@ -126,6 +173,21 @@ mod tests {
             name: format!("pod-{}", uid),
             cgroup_path: format!("/fake/{}", uid),
         }
+    }
+
+    #[tokio::test]
+    async fn logging_distributor_always_succeeds() {
+        let d = LoggingDistributor::new();
+        d.update_policy(&PolicyBundle {
+            hash: PolicyHash::new("abc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        d.attach_pod(&sample_pod("p1"), &PolicyHash::new("abc"))
+            .await
+            .unwrap();
+        d.detach_pod(&sample_pod("p1")).await.unwrap();
     }
 
     #[tokio::test]
