@@ -281,8 +281,6 @@ impl ConfigManager {
             config.backend.backend_type = match backend.to_lowercase().as_str() {
                 "auto" => BackendType::Auto,
                 "ebpf_linux" => BackendType::EbpfLinux,
-                "macos_desktop" => BackendType::MacOSDesktop,
-                "windows_desktop" => BackendType::WindowsDesktop,
                 _ => return Err(anyhow::anyhow!("Invalid backend type: {}", backend)),
             };
         }

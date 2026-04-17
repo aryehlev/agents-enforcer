@@ -1,146 +1,83 @@
-# Default values for agent-gateway-enforcer
+# agents-enforcer Helm values.
+#
+# Two workloads: `controller` runs one Deployment on the control plane,
+# `nodeAgent` runs as a DaemonSet on every Linux node. They talk over
+# gRPC on nodeAgent.grpc.port.
 
-# Image configuration
-image:
-  repository: ghcr.io/aryehlev/agents-enforcer
-  tag: ""  # Defaults to Chart appVersion
-  pullPolicy: IfNotPresent
-
-imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Gateway configuration - REQUIRED
-# List of allowed gateway addresses in IP:PORT format
-gateways:
-  - "10.0.0.1:8080"
+# Namespace the controller and node-agents live in. CRDs are cluster
+# scoped and aren't affected by this.
+namespace: enforcer-system
 
-# Cgroup path to attach to
-# Common values:
-#   /sys/fs/cgroup                    - All processes (use with caution)
-#   /sys/fs/cgroup/system.slice       - All systemd services
-#   /sys/fs/cgroup/user.slice         - All user processes
-cgroup: "/sys/fs/cgroup"
+# ---------------- Controller ----------------
+controller:
+  image:
+    repository: ghcr.io/aryehlev/agents-enforcer-controller
+    tag: ""                        # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicaCount: 1                  # bump to 2 once leader-election lands
+  # `log` does not enforce; `grpc` pushes to node-agents.
+  distributor: grpc
+  cgroupTemplate: "/sys/fs/cgroup/kubepods.slice/kubepods-pod{uid}.slice"
+  requeueSeconds: 30
+  resources:
+    limits:   { cpu: 500m,  memory: 256Mi }
+    requests: { cpu: 100m,  memory: 128Mi }
+  podAnnotations: {}
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations: []
+  affinity: {}
+  logLevel: info
 
-# File access enforcement configuration
-fileEnforcement:
-  # Enable file access control via LSM BPF
-  enabled: false
+# --------------- Node agent -----------------
+nodeAgent:
+  image:
+    repository: ghcr.io/aryehlev/agents-enforcer-node-agent
+    tag: ""
+    pullPolicy: IfNotPresent
+  grpc:
+    port: 9091                      # controller uses this to dial each node
+  resources:
+    limits:   { cpu: "1",   memory: 512Mi }
+    requests: { cpu: 100m,  memory: 128Mi }
+  podAnnotations: {}
+  # Only Linux can run eBPF; non-Linux nodes are explicitly excluded.
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations:
+    # DaemonSet on every node, including control-plane taints.
+    - operator: Exists
+      effect: NoSchedule
+    - operator: Exists
+      effect: NoExecute
+  # Required for CAP_BPF / CAP_SYS_ADMIN + access to /sys/fs/cgroup + /sys/fs/bpf.
+  hostPID: true
+  hostNetwork: false
+  privileged: true
 
-  # Default policy: false = allow all (blocklist mode), true = deny all (allowlist mode)
-  defaultDeny: false
-
-  # Paths to explicitly allow (used in defaultDeny: true mode)
-  allowPaths: []
-  #   - /tmp
-  #   - /app/workspace
-  #   - /var/log/agent
-
-  # Paths to explicitly deny (used in defaultDeny: false mode)
-  denyPaths:
-    - /etc/shadow
-    - /etc/passwd
-    - /root
-    - /home
-
-# Metrics configuration
+# -------------- Metrics ---------------------
 metrics:
-  # Enable Prometheus metrics endpoint
   enabled: true
   port: 9090
-
-  # ServiceMonitor for Prometheus Operator
   serviceMonitor:
     enabled: false
     interval: 30s
     scrapeTimeout: 10s
     labels: {}
-    #   release: prometheus
 
-# Pod configuration
-podAnnotations: {}
-
-podLabels: {}
-
-# Security context for the pod
-podSecurityContext: {}
-
-# Security context for the container
-# Note: privileged is required for eBPF
-securityContext:
-  privileged: true
-  # Alternative: use specific capabilities (requires kernel support)
-  # privileged: false
-  # capabilities:
-  #   add:
-  #     - SYS_ADMIN
-  #     - BPF
-  #     - NET_ADMIN
-  #     - PERFMON
-
-# Resource limits
-resources:
-  limits:
-    cpu: 200m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
-
-# Node selector - ensure Linux nodes
-nodeSelector:
-  kubernetes.io/os: linux
-
-# Tolerations for running on all nodes (including masters)
-tolerations:
-  - operator: Exists
-    effect: NoSchedule
-  - operator: Exists
-    effect: NoExecute
-
-# Affinity rules
-affinity: {}
-
-# Service account configuration
+# -------------- RBAC / SA -------------------
 serviceAccount:
   create: true
   annotations: {}
-  name: ""
-
-# RBAC configuration
 rbac:
   create: true
 
-# Logging configuration
-logging:
-  level: info  # trace, debug, info, warn, error
-
-# Liveness and readiness probes
-livenessProbe:
-  httpGet:
-    path: /health
-    port: metrics
-  initialDelaySeconds: 10
-  periodSeconds: 30
-  timeoutSeconds: 5
-  failureThreshold: 3
-
-readinessProbe:
-  httpGet:
-    path: /health
-    port: metrics
-  initialDelaySeconds: 5
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-
-# Extra environment variables
-extraEnv: []
-#   - name: RUST_LOG
-#     value: debug
-
-# Extra volume mounts (in addition to required cgroup/bpf mounts)
-extraVolumeMounts: []
-
-# Extra volumes
-extraVolumes: []
+# -------------- CRDs ------------------------
+# Helm 3 handles crds/ as a one-shot install. To re-apply or upgrade,
+# run `kubectl apply -f deploy/crds/` directly — Helm does not manage
+# CRD upgrades.
+crds:
+  install: true

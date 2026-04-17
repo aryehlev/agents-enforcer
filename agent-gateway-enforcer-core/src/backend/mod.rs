@@ -27,16 +27,13 @@ pub fn create_error(context: &str, message: impl Into<String>) -> anyhow::Error 
     anyhow::anyhow!("{}: {}", context, message.into())
 }
 
-/// Backend type identifier
+/// Backend type identifier. Linux-only — the project is Kubernetes-
+/// native and we dropped the desktop backends when we pivoted.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BackendType {
-    /// Linux eBPF backend
+    /// Linux eBPF backend.
     EbpfLinux,
-    /// macOS Desktop backend
-    MacOSDesktop,
-    /// Windows Desktop backend
-    WindowsDesktop,
-    /// Auto-detect backend based on platform
+    /// Auto-detect (resolves to `EbpfLinux` today).
     Auto,
 }
 
@@ -165,10 +162,10 @@ impl Default for UnifiedConfig {
 /// Identity of a pod being enforced.
 ///
 /// Kubernetes pods are identified by UID globally and namespace/name for
-/// humans; the cgroup v2 path is what we actually attach eBPF programs to.
-/// All three are carried explicitly so the controller side doesn't have
-/// to re-derive them from the kubelet, and so logs / events are always
-/// attributable without an extra lookup.
+/// humans; the cgroup v2 path is what we actually attach eBPF programs
+/// to; and `node_name` tells the controller which node agent owns the
+/// pod so RPCs go to the right place. All four are carried explicitly
+/// so neither side has to re-derive from the kubelet or the pod cache.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PodIdentity {
     /// Kubernetes pod UID (e.g. "550e8400-e29b-41d4-a716-446655440000").
@@ -180,6 +177,12 @@ pub struct PodIdentity {
     /// Absolute cgroup v2 path the node agent should attach to,
     /// e.g. `/sys/fs/cgroup/kubepods.slice/.../pod<uid>`.
     pub cgroup_path: String,
+    /// Name of the Kubernetes node hosting this pod. The controller's
+    /// gRPC distributor uses this to look up the right node-agent
+    /// endpoint. Empty string when unknown (single-node / test
+    /// scenarios); distributors must treat empty as "any node".
+    #[serde(default)]
+    pub node_name: String,
 }
 
 /// Content hash of a compiled policy bundle.
@@ -446,6 +449,7 @@ mod tests {
             namespace: "prod".into(),
             name: "agent-0".into(),
             cgroup_path: "/sys/fs/cgroup/kubepods.slice/abc".into(),
+            node_name: "node-1".into(),
         };
         let b = a.clone();
         let mut set = HashSet::new();
@@ -520,6 +524,7 @@ mod tests {
             namespace: "n".into(),
             name: "p".into(),
             cgroup_path: "/c".into(),
+            node_name: String::new(),
         };
         assert!(b.attach_pod(&pod, &PolicyHash::new("h")).await.is_err());
         assert!(b.detach_pod(&pod).await.is_err());

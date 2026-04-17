@@ -38,11 +38,22 @@ pub fn pod_identity_from(pod: &Pod, cgroup_template: &str) -> Option<PodIdentity
     let namespace = pod.metadata.namespace.clone().unwrap_or_default();
     // Replace is a one-pass str scan; fine for reconcile hot paths.
     let cgroup_path = cgroup_template.replace("{uid}", &uid);
+    // spec.nodeName is populated by the scheduler once the pod is
+    // bound. Reconciles before binding see an empty string, which is
+    // fine: the distributor treats empty as "don't dispatch yet"
+    // and the next reconcile (triggered by the pod update when the
+    // scheduler writes nodeName) will complete the attach.
+    let node_name = pod
+        .spec
+        .as_ref()
+        .and_then(|s| s.node_name.clone())
+        .unwrap_or_default();
     Some(PodIdentity {
         uid,
         namespace,
         name,
         cgroup_path,
+        node_name,
     })
 }
 

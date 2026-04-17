@@ -18,11 +18,13 @@
 //!    times with identical inputs; implementations must treat repeats
 //!    as no-ops, not errors.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use agent_gateway_enforcer_core::backend::{
     EnforcementBackend, PodIdentity, PolicyBundle, PolicyHash, Result,
 };
+use agent_gateway_enforcer_node_agent::NodeAgentClient;
 use async_trait::async_trait;
 
 /// The minimal interface a reconciler needs to push state toward node
@@ -88,6 +90,170 @@ impl LoggingDistributor {
     /// Construct a logging distributor. It's stateless; use it by value.
     pub fn new() -> Self {
         Self
+    }
+}
+
+/// gRPC-backed distributor: one `NodeAgentClient` per Kubernetes
+/// node, resolved via a pluggable [`NodeEndpointResolver`].
+///
+/// Fan-out strategy:
+/// - `update_policy` is broadcast to every node the distributor has
+///   seen at least one pod on. Idempotent by design (node agents
+///   dedupe by bundle hash), so double-stage on a racy new node is a
+///   no-op.
+/// - `attach_pod` / `detach_pod` are routed to `pod.node_name`. An
+///   empty `node_name` surfaces as an error — the reconciler treats
+///   it as "pod not yet bound" and retries on the next pass.
+pub struct GrpcDistributor {
+    resolver: Arc<dyn NodeEndpointResolver>,
+    // Cached client per node. `tokio::sync::RwLock` so attach/detach
+    // can run in parallel on hot nodes while a cold new-node insert
+    // takes the write lock briefly.
+    clients: tokio::sync::RwLock<HashMap<String, NodeClient>>,
+}
+
+/// Resolve a Kubernetes node name to the host:port the node-agent is
+/// listening on. A production resolver queries the kube `Node` API
+/// for `status.addresses` + a known port; tests and single-node
+/// setups plug in a `StaticNodeEndpointResolver`.
+#[async_trait]
+pub trait NodeEndpointResolver: Send + Sync {
+    /// Return `http://host:port` for `node_name`, or an error if the
+    /// node isn't known.
+    async fn endpoint_for(&self, node_name: &str) -> anyhow::Result<String>;
+}
+
+/// Hard-coded resolver used by tests and single-node clusters.
+pub struct StaticNodeEndpointResolver {
+    default_port: u16,
+}
+
+impl StaticNodeEndpointResolver {
+    /// Every node maps to `http://{node_name}:{default_port}`. Works
+    /// when the kube service name resolves via DNS to the per-node
+    /// agent — i.e., a headless Service over the DaemonSet.
+    pub fn new(default_port: u16) -> Self {
+        Self { default_port }
+    }
+}
+
+#[async_trait]
+impl NodeEndpointResolver for StaticNodeEndpointResolver {
+    async fn endpoint_for(&self, node_name: &str) -> anyhow::Result<String> {
+        if node_name.is_empty() {
+            anyhow::bail!("empty node_name; pod not yet bound");
+        }
+        Ok(format!("http://{}:{}", node_name, self.default_port))
+    }
+}
+
+type NodeClient = NodeAgentClient<tonic::transport::Channel>;
+
+impl GrpcDistributor {
+    /// Construct a distributor. No dials happen here — clients are
+    /// lazily created on first use and cached.
+    pub fn new(resolver: Arc<dyn NodeEndpointResolver>) -> Self {
+        Self {
+            resolver,
+            clients: tokio::sync::RwLock::new(HashMap::new()),
+        }
+    }
+
+    async fn client_for(&self, node_name: &str) -> Result<NodeClient> {
+        {
+            let guard = self.clients.read().await;
+            if let Some(c) = guard.get(node_name) {
+                return Ok(c.clone());
+            }
+        }
+        let endpoint = self.resolver.endpoint_for(node_name).await?;
+        let client = NodeAgentClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("dial {}: {}", endpoint, e))?;
+        let mut guard = self.clients.write().await;
+        // Double-check in case a concurrent caller beat us to the insert.
+        let entry = guard.entry(node_name.to_string()).or_insert(client);
+        Ok(entry.clone())
+    }
+
+    async fn broadcast<F, Fut>(&self, call: F) -> Result<()>
+    where
+        F: Fn(NodeClient) -> Fut + Send + Sync,
+        // Note: explicit std::result::Result — our crate-level
+        // `Result<T>` is a single-arg alias over anyhow::Error and
+        // silently collides with the name here.
+        Fut: std::future::Future<Output = std::result::Result<(), tonic::Status>> + Send,
+    {
+        // Snapshot the clients so we don't hold the lock across
+        // the network calls. Copying Arc'd channels is cheap.
+        let snapshot: Vec<(String, NodeClient)> = {
+            let guard = self.clients.read().await;
+            guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+        for (node, client) in snapshot {
+            if let Err(e) = call(client).await {
+                // A single flaky node shouldn't block programming the
+                // rest of the fleet; log + continue. The reconciler
+                // retries on its own schedule.
+                tracing::warn!(node = %node, err = %e, "broadcast call failed");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl BundleDistributor for GrpcDistributor {
+    async fn update_policy(&self, bundle: &PolicyBundle) -> Result<()> {
+        let wire = agent_gateway_enforcer_node_agent::bundle_to_proto(bundle);
+        self.broadcast(move |mut c| {
+            let w = wire.clone();
+            async move {
+                c.update_policy(tonic::Request::new(
+                    agent_gateway_enforcer_node_agent::UpdatePolicyRequest { bundle: Some(w) },
+                ))
+                .await
+                .map(|_| ())
+            }
+        })
+        .await
+    }
+
+    async fn attach_pod(&self, pod: &PodIdentity, bundle_hash: &PolicyHash) -> Result<()> {
+        let client = self.client_for(&pod.node_name).await?;
+        let req = agent_gateway_enforcer_node_agent::AttachPodRequest {
+            pod: Some(agent_gateway_enforcer_node_agent::pod_to_proto(pod)),
+            bundle_hash: bundle_hash.as_str().to_string(),
+        };
+        let mut c = client;
+        // On first-attach for a node we also need to have seen
+        // update_policy; callers always run reconcile_policy which
+        // orders update_policy before attach_pod.
+        c.attach_pod(tonic::Request::new(req))
+            .await
+            .map_err(|s| anyhow::anyhow!("attach_pod: {}", s))?;
+        Ok(())
+    }
+
+    async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
+        // If we never had a client for this node, there's nothing to
+        // detach — treat as a no-op rather than bubbling up an error.
+        let client = match self.client_for(&pod.node_name).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(node=%pod.node_name, err=%e, "detach_pod: no client, skipping");
+                return Ok(());
+            }
+        };
+        let mut c = client;
+        c.detach_pod(tonic::Request::new(
+            agent_gateway_enforcer_node_agent::DetachPodRequest {
+                pod: Some(agent_gateway_enforcer_node_agent::pod_to_proto(pod)),
+            },
+        ))
+        .await
+        .map_err(|s| anyhow::anyhow!("detach_pod: {}", s))?;
+        Ok(())
     }
 }
 
@@ -172,6 +338,7 @@ mod tests {
             namespace: "ns".into(),
             name: format!("pod-{}", uid),
             cgroup_path: format!("/fake/{}", uid),
+            node_name: "node".into(),
         }
     }
 
@@ -188,6 +355,22 @@ mod tests {
             .await
             .unwrap();
         d.detach_pod(&sample_pod("p1")).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn static_resolver_formats_node_url() {
+        let r = StaticNodeEndpointResolver::new(9091);
+        assert_eq!(
+            r.endpoint_for("node-1").await.unwrap(),
+            "http://node-1:9091"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_resolver_rejects_empty_node_name() {
+        let r = StaticNodeEndpointResolver::new(9091);
+        let err = r.endpoint_for("").await.unwrap_err();
+        assert!(err.to_string().contains("not yet bound"));
     }
 
     #[tokio::test]

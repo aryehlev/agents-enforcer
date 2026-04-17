@@ -25,6 +25,7 @@ fn pod_in(dir: &tempfile::TempDir, uid: &str) -> PodIdentity {
         namespace: "prod".into(),
         name: format!("agent-{}", uid),
         cgroup_path: dir.path().to_string_lossy().into_owned(),
+        node_name: "test-node".into(),
     }
 }
 

@@ -27,6 +27,7 @@ use agent_gateway_enforcer_core::backend::{PodIdentity, PolicyHash};
 use crate::compiler::{compile_policy, CompileError};
 use crate::crds::{AgentPolicySpec, GatewayCatalogSpec};
 use crate::distributor::BundleDistributor;
+use crate::metrics::{record_reconcile, time_phase};
 
 /// Everything [`reconcile_policy`] needs to make a decision without
 /// touching the Kubernetes API. The caller owns each reference — the
@@ -86,34 +87,57 @@ pub async fn reconcile_policy(
     req: ReconcileRequest<'_>,
     distributor: &dyn BundleDistributor,
 ) -> Result<ReconcileOutcome, ReconcileError> {
-    let bundle = compile_policy(req.policy, req.catalogs)?;
+    // Wrap the body so compile / distribute errors can be tagged in
+    // the reconcile-total counter before bubbling up. The caller
+    // (controller.rs) already patches status; the metric is the
+    // machine-readable equivalent for dashboards.
+    let bundle = {
+        let _t = time_phase("compile").start_timer();
+        match compile_policy(req.policy, req.catalogs) {
+            Ok(b) => b,
+            Err(e) => {
+                record_reconcile("compile_error");
+                return Err(e.into());
+            }
+        }
+    };
     let bundle_hash = bundle.hash.clone();
 
-    distributor
-        .update_policy(&bundle)
-        .await
-        .map_err(ReconcileError::Distribute)?;
+    {
+        // Phase label matches the plan's {compile, push, attach}
+        // bucket names. `start_timer()` returns a HistogramTimer
+        // that observes its duration on drop.
+        let _t = time_phase("push").start_timer();
+        if let Err(e) = distributor.update_policy(&bundle).await {
+            record_reconcile("distribute_error");
+            return Err(ReconcileError::Distribute(e));
+        }
+    }
 
     // Diff current vs previous. Using UIDs means rename/move doesn't
     // trip us up — a pod UID survives everything except recreation.
     let currently: HashSet<&str> = req.matching_pods.iter().map(|p| p.uid.as_str()).collect();
 
-    for pod in req.matching_pods {
-        distributor
-            .attach_pod(pod, &bundle_hash)
-            .await
-            .map_err(ReconcileError::Distribute)?;
-    }
+    {
+        let _t = time_phase("attach").start_timer();
+        for pod in req.matching_pods {
+            if let Err(e) = distributor.attach_pod(pod, &bundle_hash).await {
+                record_reconcile("distribute_error");
+                return Err(ReconcileError::Distribute(e));
+            }
+        }
 
-    for pod in req.previously_attached {
-        if !currently.contains(pod.uid.as_str()) {
-            distributor
-                .detach_pod(pod)
-                .await
-                .map_err(ReconcileError::Distribute)?;
+        for pod in req.previously_attached {
+            if !currently.contains(pod.uid.as_str()) {
+                if let Err(e) = distributor.detach_pod(pod).await {
+                    record_reconcile("distribute_error");
+                    return Err(ReconcileError::Distribute(e));
+                }
+            }
         }
     }
 
+    record_reconcile("ok");
     Ok(ReconcileOutcome {
         bundle_hash,
         enforced_pods: req.matching_pods.len() as u32,
@@ -143,6 +167,7 @@ mod tests {
             namespace: "prod".into(),
             name: format!("pod-{}", uid),
             cgroup_path: format!("/fake/{}", uid),
+            node_name: "node".into(),
         }
     }
 

@@ -8,6 +8,13 @@ license = "MIT"
 
 [dependencies]
 agent-gateway-enforcer-core = { path = "../agent-gateway-enforcer-core" }
+# Client-side only: node-agent is pulled in without the `server`
+# feature so aya / libbpf are not transitively required to build
+# the controller.
+agent-gateway-enforcer-node-agent = { path = "../agent-gateway-enforcer-node-agent", default-features = false }
+tonic = "0.10"
+prometheus = { workspace = true }
+once_cell = "1.19"
 
 serde = { workspace = true }
 serde_json = { workspace = true }

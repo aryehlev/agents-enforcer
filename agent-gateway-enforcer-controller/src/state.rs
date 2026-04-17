@@ -109,6 +109,7 @@ mod tests {
             namespace: "ns".into(),
             name: format!("pod-{}", uid),
             cgroup_path: format!("/fake/{}", uid),
+            node_name: "node".into(),
         }
     }
 

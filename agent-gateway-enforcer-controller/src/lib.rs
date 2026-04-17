@@ -28,6 +28,7 @@ pub mod controller;
 pub mod crds;
 pub mod distributor;
 pub mod matching;
+pub mod metrics;
 pub mod reconciler;
 pub mod state;
 
@@ -38,7 +39,10 @@ pub use crds::{
     EnforcerConfig, EnforcerConfigSpec, GatewayCatalog, GatewayCatalogSpec, LabelSelector,
     ViolationKind,
 };
-pub use distributor::{BundleDistributor, InMemoryDistributor, LoggingDistributor};
+pub use distributor::{
+    BundleDistributor, GrpcDistributor, InMemoryDistributor, LoggingDistributor,
+    NodeEndpointResolver, StaticNodeEndpointResolver,
+};
 pub use matching::{pod_identity_from, pod_matches_selector};
 pub use reconciler::{reconcile_policy, ReconcileError, ReconcileOutcome, ReconcileRequest};
 pub use state::{PolicyKey, PolicyStateStore};

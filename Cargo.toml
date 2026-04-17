@@ -5,8 +5,8 @@ members = [
     "agent-gateway-enforcer-cli",
     "agent-gateway-enforcer-common",
     "agent-gateway-enforcer-controller",
+    "agent-gateway-enforcer-node-agent",
     "backends/ebpf-linux",
-    "backends/macos-desktop",
     "agent-gateway-enforcer",         # Legacy compatibility shim
     "xtask",
 ]

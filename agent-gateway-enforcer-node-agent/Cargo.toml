@@ -1,0 +1,43 @@
+[package]
+name = "agent-gateway-enforcer-node-agent"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "gRPC node agent for agent gateway enforcement"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+agent-gateway-enforcer-core = { path = "../agent-gateway-enforcer-core" }
+# Only the node-agent binary depends on the eBPF backend. The lib
+# (which the controller pulls in for the gRPC client types) stays
+# backend-free so controller builds don't touch aya.
+agent-gateway-enforcer-backend-ebpf-linux = { path = "../backends/ebpf-linux", optional = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+tonic = "0.10"
+prost = "0.12"
+clap = { workspace = true }
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-build = "0.10"
+
+[features]
+default = []
+# Build the full server-side binary. Off by default so the
+# controller can depend on this crate without pulling in aya +
+# libbpf build requirements on non-Linux CI images.
+server = ["agent-gateway-enforcer-backend-ebpf-linux"]
+
+[[bin]]
+name = "enforcer-node-agent"
+path = "src/bin/node_agent.rs"
+required-features = ["server"]

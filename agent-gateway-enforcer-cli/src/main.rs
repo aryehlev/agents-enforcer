@@ -69,7 +69,7 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
 
-        /// Backend type (auto, ebpf_linux, macos_desktop, windows_desktop)
+        /// Backend type (auto, ebpf_linux)
         #[arg(short, long)]
         backend: Option<String>,
 
@@ -225,8 +225,6 @@ fn build_config_from_args(
         match backend_str.to_lowercase().as_str() {
             "auto" => BackendType::Auto,
             "ebpf_linux" => BackendType::EbpfLinux,
-            "macos_desktop" => BackendType::MacOSDesktop,
-            "windows_desktop" => BackendType::WindowsDesktop,
             _ => {
                 warn!("Unknown backend type '{}', using auto-detect", backend_str);
                 BackendType::Auto
@@ -536,12 +534,5 @@ fn list_backends() {
     #[cfg(target_os = "linux")]
     println!("  - ebpf_linux (Linux eBPF)");
 
-    #[cfg(target_os = "macos")]
-    println!("  - macos_desktop (macOS Desktop)");
-
-    #[cfg(target_os = "windows")]
-    println!("  - windows_desktop (Windows Desktop)");
-
-    println!("\nNote: Backends may not be compiled/available on all platforms.");
-    println!("Use --backend auto to auto-detect the appropriate backend.");
+    println!("\nNote: Backend is Linux-only. Use --backend auto for the default.");
 }

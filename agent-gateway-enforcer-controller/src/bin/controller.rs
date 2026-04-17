@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_gateway_enforcer_controller::{
-    ControllerConfig, LoggingDistributor, run, BundleDistributor,
+    run, BundleDistributor, ControllerConfig, GrpcDistributor, LoggingDistributor,
+    StaticNodeEndpointResolver,
 };
 use anyhow::Context;
 use clap::Parser;
@@ -22,12 +23,16 @@ use kube::Client;
     about = "Kubernetes controller for agents.enforcer.io CRDs"
 )]
 struct Args {
-    /// Distributor mode. `log` is a dry run that only logs decisions;
-    /// `grpc-stub` is a placeholder for the upcoming node-agent RPC
-    /// transport. The node-agent transport is tracked separately and
-    /// this flag exists so ops have a single knob to flip when it lands.
+    /// Distributor mode. `log` is a dry run that logs decisions
+    /// without enforcing; `grpc` dials one node-agent per Kubernetes
+    /// node via the DaemonSet's node-scoped DNS.
     #[arg(long, value_enum, default_value = "log")]
     distributor: DistributorKind,
+
+    /// Port the node-agent DaemonSet listens on. Only used when
+    /// --distributor=grpc.
+    #[arg(long, default_value_t = 9091)]
+    node_agent_port: u16,
 
     /// Cgroup v2 path template; `{uid}` is replaced with the pod UID.
     #[arg(
@@ -45,8 +50,8 @@ struct Args {
 enum DistributorKind {
     /// Log decisions only; do not enforce.
     Log,
-    /// Placeholder for the gRPC transport; not yet implemented.
-    GrpcStub,
+    /// Dial one node-agent per Kubernetes node.
+    Grpc,
 }
 
 #[tokio::main]
@@ -65,10 +70,10 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("running in dry-run mode (distributor=log)");
             Arc::new(LoggingDistributor::new())
         }
-        DistributorKind::GrpcStub => {
-            anyhow::bail!(
-                "distributor=grpc-stub is not yet implemented; see roadmap Phase B.4"
-            );
+        DistributorKind::Grpc => {
+            tracing::info!(port = args.node_agent_port, "using gRPC distributor");
+            let resolver = Arc::new(StaticNodeEndpointResolver::new(args.node_agent_port));
+            Arc::new(GrpcDistributor::new(resolver))
         }
     };
 

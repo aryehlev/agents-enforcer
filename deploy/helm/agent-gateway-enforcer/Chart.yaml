@@ -1,13 +1,17 @@
 apiVersion: v2
-name: agent-gateway-enforcer
-description: eBPF-based gateway enforcer for AI agents - restricts network and file access
+name: agents-enforcer
+description: >
+  Kubernetes-native eBPF enforcer for AI agent workloads. Installs the
+  controller (Deployment) and the per-node node-agent (DaemonSet) plus
+  the agents.enforcer.io CRDs.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
+kubeVersion: ">=1.26.0"
 keywords:
   - ebpf
   - security
-  - gateway
+  - kubernetes
   - ai-agents
   - network-policy
 home: https://github.com/aryehlev/agents-enforcer
