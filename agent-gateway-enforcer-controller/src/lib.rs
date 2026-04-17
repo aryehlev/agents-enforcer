@@ -34,8 +34,9 @@ pub mod state;
 pub use compiler::{compile_policy, CompileError};
 pub use controller::{error_policy, reconcile, run, Context, ControllerConfig, ReconcileLoopError};
 pub use crds::{
-    AgentPolicy, AgentPolicySpec, AgentPolicyStatus, EnforcerConfig, EnforcerConfigSpec,
-    GatewayCatalog, GatewayCatalogSpec, LabelSelector,
+    AgentPolicy, AgentPolicySpec, AgentPolicyStatus, AgentViolation, AgentViolationSpec,
+    EnforcerConfig, EnforcerConfigSpec, GatewayCatalog, GatewayCatalogSpec, LabelSelector,
+    ViolationKind,
 };
 pub use distributor::{BundleDistributor, InMemoryDistributor, LoggingDistributor};
 pub use matching::{pod_identity_from, pod_matches_selector};

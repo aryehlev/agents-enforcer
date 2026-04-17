@@ -78,7 +78,9 @@ fn main() -> Result<()> {
 /// them to disk so `kubectl apply -f deploy/crds/` works without the
 /// controller running.
 fn gen_crds(opts: GenCrdsOptions) -> Result<()> {
-    use agent_gateway_enforcer_controller::{AgentPolicy, EnforcerConfig, GatewayCatalog};
+    use agent_gateway_enforcer_controller::{
+        AgentPolicy, AgentViolation, EnforcerConfig, GatewayCatalog,
+    };
     use kube::CustomResourceExt;
 
     let out_dir = opts
@@ -87,10 +89,11 @@ fn gen_crds(opts: GenCrdsOptions) -> Result<()> {
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("create {}", out_dir.display()))?;
 
-    let crds: [(&str, serde_yaml::Value); 3] = [
+    let crds: [(&str, serde_yaml::Value); 4] = [
         ("agentpolicies.agents.enforcer.io.yaml", serde_yaml::to_value(AgentPolicy::crd())?),
         ("gatewaycatalogs.agents.enforcer.io.yaml", serde_yaml::to_value(GatewayCatalog::crd())?),
         ("enforcerconfigs.agents.enforcer.io.yaml", serde_yaml::to_value(EnforcerConfig::crd())?),
+        ("agentviolations.agents.enforcer.io.yaml", serde_yaml::to_value(AgentViolation::crd())?),
     ];
 
     for (name, value) in crds {

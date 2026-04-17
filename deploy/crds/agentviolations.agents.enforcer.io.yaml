@@ -1,0 +1,90 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentviolations.agents.enforcer.io
+spec:
+  group: agents.enforcer.io
+  names:
+    categories: []
+    kind: AgentViolation
+    plural: agentviolations
+    shortNames:
+    - agentvio
+    singular: agentviolation
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.podName
+      name: Pod
+      type: string
+    - jsonPath: .spec.policyName
+      name: Policy
+      type: string
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .spec.count
+      name: Count
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for AgentViolationSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Structured record of a sustained policy violation, created by the controller from aggregated node-agent events. Namespaced so operators can `kubectl get agentviolations -n prod` to see only the ones they own.
+
+              These are intentionally cheap objects: one CR per (pod, policy, rule, bucket) tuple with a short TTL. The aggregator buckets raw events into windows (default 60s) so a single misbehaving pod produces a handful of CRs rather than millions.
+            properties:
+              count:
+                description: How many times this exact (kind, detail) fired inside the aggregation window. At least 1.
+                format: uint32
+                minimum: 0.0
+                type: integer
+              detail:
+                description: Human-readable detail, e.g. `connect to 1.2.3.4:443` or `exec /bin/sh`. Format depends on `kind`; callers shouldn't pattern-match on it.
+                type: string
+              firstSeen:
+                description: RFC3339 timestamp of the first occurrence in the window.
+                type: string
+              kind:
+                description: What kind of rule was violated. Matched to the decision tag emitted from the data plane (see `events.c` event types).
+                enum:
+                - EgressBlocked
+                - FileBlocked
+                - ExecBlocked
+                - MutationBlocked
+                type: string
+              lastSeen:
+                description: RFC3339 timestamp of the most recent occurrence in the window.
+                type: string
+              podName:
+                description: Name of the pod that triggered the violation.
+                type: string
+              podUid:
+                description: UID of the pod. Used for exact identification in case namespaces contain pods with the same name after recreation.
+                type: string
+              policyName:
+                description: The AgentPolicy that was being enforced when this violation fired. Unqualified name — namespace is the CR's namespace.
+                type: string
+            required:
+            - count
+            - detail
+            - firstSeen
+            - kind
+            - lastSeen
+            - podName
+            - podUid
+            - policyName
+            type: object
+        required:
+        - spec
+        title: AgentViolation
+        type: object
+    served: true
+    storage: true
+    subresources: {}

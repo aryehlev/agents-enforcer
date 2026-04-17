@@ -26,6 +26,8 @@ use agent_gateway_enforcer_core::backend::PodIdentity;
 use futures::StreamExt;
 use kube::api::{ListParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
+use kube::runtime::events::{Event, EventType, Recorder, Reporter};
+use kube::runtime::finalizer::{finalizer, Event as FinalizerEvent};
 use kube::runtime::watcher;
 use kube::{Api, Client, Resource, ResourceExt};
 use serde_json::json;
@@ -72,6 +74,20 @@ pub struct Context {
     pub state: Arc<PolicyStateStore>,
     /// Runtime config.
     pub config: ControllerConfig,
+    /// Reporter identifying this controller instance in
+    /// `kubectl get events`. Set once at startup.
+    pub reporter: Reporter,
+}
+
+/// Event reason strings. Stable — operators filter on these. Keep
+/// the set small; noisy controllers train people to ignore events.
+pub mod event_reasons {
+    /// Emitted when a reconcile successfully pushes a bundle and
+    /// the attached pod count is non-zero.
+    pub const PROGRAMMED: &str = "Programmed";
+    /// Emitted when compilation or distribution failed. Paired with
+    /// a message explaining why.
+    pub const DEGRADED: &str = "Degraded";
 }
 
 /// Error taxonomy for the reconcile loop. kube-rs hands us whatever
@@ -87,47 +103,68 @@ pub enum ReconcileLoopError {
     Kube(#[from] kube::Error),
 }
 
+/// Finalizer name written into `metadata.finalizers`. Scoped under
+/// our API group so other controllers don't accidentally clash.
+pub const FINALIZER: &str = "agents.enforcer.io/cleanup";
+
 /// Reconcile a single `AgentPolicy`. Called by the kube-rs `Controller`.
+///
+/// This is just the finalizer adapter — the real work lives in
+/// [`reconcile_apply`] (normal reconciles) and [`reconcile_cleanup`]
+/// (detach everything and let the deletion complete). Using
+/// `kube::runtime::finalizer` means Kubernetes holds the object until
+/// we finish cleanup, closing the previous branch's "fast delete"
+/// gap where detach calls could be lost.
 pub async fn reconcile(
     policy: Arc<AgentPolicy>,
     ctx: Arc<Context>,
 ) -> Result<Action, ReconcileLoopError> {
-    let namespace = policy
-        .namespace()
-        .ok_or_else(|| kube::Error::Api(kube::core::ErrorResponse {
+    let namespace = policy.namespace().ok_or_else(|| {
+        kube::Error::Api(kube::core::ErrorResponse {
             status: "Failure".into(),
             message: "AgentPolicy missing namespace".into(),
             reason: "BadRequest".into(),
             code: 400,
-        }))?;
+        })
+    })?;
+    let policies: Api<AgentPolicy> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    finalizer(&policies, FINALIZER, policy, |event| async {
+        match event {
+            FinalizerEvent::Apply(p) => reconcile_apply(p, ctx.clone()).await,
+            FinalizerEvent::Cleanup(p) => reconcile_cleanup(p, ctx.clone()).await,
+        }
+    })
+    .await
+    .map_err(|e| match e {
+        kube::runtime::finalizer::Error::ApplyFailed(inner)
+        | kube::runtime::finalizer::Error::CleanupFailed(inner) => inner,
+        other => ReconcileLoopError::Kube(kube::Error::Api(kube::core::ErrorResponse {
+            status: "Failure".into(),
+            message: format!("finalizer: {other}"),
+            reason: "FinalizerError".into(),
+            code: 500,
+        })),
+    })
+}
+
+/// Apply branch: policy is live; reconcile matches + status.
+async fn reconcile_apply(
+    policy: Arc<AgentPolicy>,
+    ctx: Arc<Context>,
+) -> Result<Action, ReconcileLoopError> {
+    let namespace = policy.namespace().expect("checked in reconcile");
     let name = policy.name_any();
     let key = PolicyKey::new(namespace.clone(), name.clone());
-
-    // Deletion short-circuit. See module docs for the finalizer caveat.
-    if policy.meta().deletion_timestamp.is_some() {
-        tracing::info!(policy = %format!("{}/{}", key.namespace, key.name), "cleaning up");
-        if let Some(attached) = ctx.state.remove(&key) {
-            for pod in &attached {
-                if let Err(e) = ctx.distributor.detach_pod(pod).await {
-                    tracing::warn!(err=%e, pod=%pod.uid, "detach during delete failed; will retry");
-                }
-            }
-        }
-        return Ok(Action::await_change());
-    }
 
     let policies: Api<AgentPolicy> = Api::namespaced(ctx.client.clone(), &namespace);
     let pods: Api<k8s_openapi::api::core::v1::Pod> =
         Api::namespaced(ctx.client.clone(), &namespace);
     let catalogs: Api<GatewayCatalog> = Api::all(ctx.client.clone());
 
-    // Fetch catalogs referenced by the policy (if any). We always
-    // list the full catalog set rather than one-by-one because the
-    // informer cache already holds them and re-listing is free.
     let catalog_names = referenced_catalog_names(&policy.spec.egress);
     let catalog_map = fetch_catalogs(&catalogs, &catalog_names).await?;
 
-    // Resolve the pod set.
     let matching_pods =
         list_matching_pods(&pods, &policy, &ctx.config.cgroup_template).await?;
     let previously_attached = ctx.state.get(&key);
@@ -148,8 +185,6 @@ pub async fn reconcile(
             o
         }
         Err(e) => {
-            // Write the failure to status so `kubectl describe` shows
-            // it, then surface it to the error_policy for backoff.
             let message = e.to_string();
             let _ = patch_status(
                 &policies,
@@ -157,10 +192,11 @@ pub async fn reconcile(
                 &AgentPolicyStatus {
                     last_bundle_hash: None,
                     enforced_pods: 0,
-                    message: Some(message),
+                    message: Some(message.clone()),
                 },
             )
             .await;
+            emit_event(&ctx, &policy, EventType::Warning, event_reasons::DEGRADED, &message).await;
             return Err(e.into());
         }
     };
@@ -171,12 +207,52 @@ pub async fn reconcile(
         &AgentPolicyStatus {
             last_bundle_hash: Some(outcome.bundle_hash.as_str().to_string()),
             enforced_pods: outcome.enforced_pods,
-            message: outcome.message,
+            message: outcome.message.clone(),
         },
     )
     .await?;
 
+    emit_event(
+        &ctx,
+        &policy,
+        EventType::Normal,
+        event_reasons::PROGRAMMED,
+        &format!(
+            "Programmed bundle {} on {} pod(s)",
+            &outcome.bundle_hash.as_str()[..outcome.bundle_hash.as_str().len().min(12)],
+            outcome.enforced_pods
+        ),
+    )
+    .await;
+
     Ok(Action::requeue(ctx.config.requeue_interval))
+}
+
+/// Cleanup branch: Kubernetes has set `deletionTimestamp` and is
+/// waiting for our finalizer. Detach everything we had attached,
+/// drop state, then return Ok — kube::runtime::finalizer removes the
+/// finalizer from `metadata.finalizers` so the object can actually
+/// disappear.
+async fn reconcile_cleanup(
+    policy: Arc<AgentPolicy>,
+    ctx: Arc<Context>,
+) -> Result<Action, ReconcileLoopError> {
+    let namespace = policy.namespace().expect("checked in reconcile");
+    let name = policy.name_any();
+    let key = PolicyKey::new(namespace, name.clone());
+    tracing::info!(policy = %format!("{}/{}", key.namespace, key.name), "finalizer cleanup");
+
+    if let Some(attached) = ctx.state.remove(&key) {
+        for pod in &attached {
+            if let Err(e) = ctx.distributor.detach_pod(pod).await {
+                // Retry — Kubernetes keeps the object pending on the
+                // finalizer so no pods can sneak back in.
+                tracing::warn!(err=%e, pod=%pod.uid, "detach during cleanup failed");
+                return Err(ReconcileLoopError::Reconcile(ReconcileError::Distribute(e)));
+            }
+        }
+    }
+    Ok(Action::await_change())
 }
 
 /// Failure handler invoked by kube-rs when reconcile returns Err. We
@@ -203,6 +279,10 @@ pub async fn run(
         distributor,
         state: Arc::new(PolicyStateStore::new()),
         config,
+        reporter: Reporter {
+            controller: "agents.enforcer.io/controller".into(),
+            instance: std::env::var("POD_NAME").ok(),
+        },
     });
 
     let policies: Api<AgentPolicy> = Api::all(client.clone());
@@ -230,6 +310,37 @@ pub async fn run(
         .await;
 
     Ok(())
+}
+
+/// Emit a Kubernetes Event on behalf of an AgentPolicy. Failures to
+/// write the event are logged but don't propagate: if the apiserver
+/// can't accept events we have bigger problems than a missing line
+/// in `kubectl get events`, and the reconcile result itself is
+/// already durable via status.
+async fn emit_event(
+    ctx: &Context,
+    policy: &AgentPolicy,
+    event_type: EventType,
+    reason: &str,
+    note: &str,
+) {
+    let recorder = Recorder::new(
+        ctx.client.clone(),
+        ctx.reporter.clone(),
+        policy.object_ref(&()),
+    );
+    if let Err(e) = recorder
+        .publish(Event {
+            type_: event_type,
+            reason: reason.to_string(),
+            note: Some(note.to_string()),
+            action: reason.to_string(),
+            secondary: None,
+        })
+        .await
+    {
+        tracing::debug!(err=%e, "failed to publish k8s event");
+    }
 }
 
 fn referenced_catalog_names(egress: &Option<EgressPolicy>) -> Vec<String> {
@@ -321,5 +432,24 @@ mod tests {
         let cfg = ControllerConfig::default();
         assert!(cfg.cgroup_template.contains("{uid}"));
         assert!(cfg.requeue_interval >= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn event_reasons_are_stable_strings() {
+        // Operators filter on these — if we rename them we need to
+        // rev the crate minor version and document the break.
+        assert_eq!(event_reasons::PROGRAMMED, "Programmed");
+        assert_eq!(event_reasons::DEGRADED, "Degraded");
+    }
+
+    #[test]
+    fn finalizer_name_is_api_group_scoped() {
+        // Must be a valid finalizer (domain/name) and live in our
+        // API group so other controllers never remove it by
+        // accident. Any change here is a breaking change because
+        // existing objects in the cluster will already carry this
+        // finalizer under `metadata.finalizers`.
+        assert!(FINALIZER.starts_with("agents.enforcer.io/"));
+        assert!(FINALIZER.contains('/'));
     }
 }

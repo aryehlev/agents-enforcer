@@ -25,9 +25,13 @@ rules:
     resources:
       - agentpolicies
       - agentpolicies/status
+      - agentpolicies/finalizers
       - gatewaycatalogs
       - enforcerconfigs
-    verbs: ["get", "list", "watch", "patch", "update", "create"]
+      - agentviolations
+    # delete is required for AgentViolation TTL GC; agentpolicies
+    # themselves are never deleted by the controller.
+    verbs: ["get", "list", "watch", "patch", "update", "create", "delete"]
   - apiGroups: [""]
     resources: ["pods", "namespaces"]
     verbs: ["get", "list", "watch"]

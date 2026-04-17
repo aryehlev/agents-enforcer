@@ -188,6 +188,73 @@ pub struct CatalogGateway {
 }
 
 // -------------------------------------------------------------------
+// AgentViolation
+// -------------------------------------------------------------------
+
+/// Structured record of a sustained policy violation, created by the
+/// controller from aggregated node-agent events. Namespaced so
+/// operators can `kubectl get agentviolations -n prod` to see only
+/// the ones they own.
+///
+/// These are intentionally cheap objects: one CR per (pod, policy,
+/// rule, bucket) tuple with a short TTL. The aggregator buckets raw
+/// events into windows (default 60s) so a single misbehaving pod
+/// produces a handful of CRs rather than millions.
+#[derive(CustomResource, Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[kube(
+    group = "agents.enforcer.io",
+    version = "v1alpha1",
+    kind = "AgentViolation",
+    namespaced,
+    shortname = "agentvio",
+    printcolumn = r#"{"name":"Pod","type":"string","jsonPath":".spec.podName"}"#,
+    printcolumn = r#"{"name":"Policy","type":"string","jsonPath":".spec.policyName"}"#,
+    printcolumn = r#"{"name":"Kind","type":"string","jsonPath":".spec.kind"}"#,
+    printcolumn = r#"{"name":"Count","type":"integer","jsonPath":".spec.count"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentViolationSpec {
+    /// Name of the pod that triggered the violation.
+    pub pod_name: String,
+    /// UID of the pod. Used for exact identification in case
+    /// namespaces contain pods with the same name after recreation.
+    pub pod_uid: String,
+    /// The AgentPolicy that was being enforced when this violation
+    /// fired. Unqualified name — namespace is the CR's namespace.
+    pub policy_name: String,
+    /// What kind of rule was violated. Matched to the decision tag
+    /// emitted from the data plane (see `events.c` event types).
+    pub kind: ViolationKind,
+    /// Human-readable detail, e.g. `connect to 1.2.3.4:443` or
+    /// `exec /bin/sh`. Format depends on `kind`; callers shouldn't
+    /// pattern-match on it.
+    pub detail: String,
+    /// How many times this exact (kind, detail) fired inside the
+    /// aggregation window. At least 1.
+    pub count: u32,
+    /// RFC3339 timestamp of the first occurrence in the window.
+    pub first_seen: String,
+    /// RFC3339 timestamp of the most recent occurrence in the window.
+    pub last_seen: String,
+}
+
+/// Category of violation. Kept narrow on purpose: the aggregator
+/// maps data-plane event types to these and we'd rather add variants
+/// here than let free-form strings creep into the API.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+pub enum ViolationKind {
+    /// `cgroup/connect4|6` denied a connection to an unlisted gateway.
+    EgressBlocked,
+    /// `lsm/file_open` or `lsm/file_permission` denied a file op.
+    FileBlocked,
+    /// `lsm/bprm_check_security` denied an exec.
+    ExecBlocked,
+    /// `lsm/path_unlink|mkdir|rmdir` denied a mutation.
+    MutationBlocked,
+}
+
+// -------------------------------------------------------------------
 // EnforcerConfig
 // -------------------------------------------------------------------
 
@@ -247,6 +314,31 @@ mod tests {
     #[test]
     fn egress_action_defaults_to_audit() {
         assert_eq!(EgressAction::default(), EgressAction::Audit);
+    }
+
+    #[test]
+    fn agent_violation_crd_is_namespaced_with_printer_columns() {
+        let crd = AgentViolation::crd();
+        assert_eq!(crd.spec.scope, "Namespaced");
+        // Five printer columns so `kubectl get agentviolations` is
+        // useful without -o wide.
+        let v = &crd.spec.versions[0];
+        let cols = v.additional_printer_columns.as_ref().unwrap();
+        assert_eq!(cols.len(), 5);
+    }
+
+    #[test]
+    fn violation_kind_round_trips() {
+        for k in [
+            ViolationKind::EgressBlocked,
+            ViolationKind::FileBlocked,
+            ViolationKind::ExecBlocked,
+            ViolationKind::MutationBlocked,
+        ] {
+            let s = serde_json::to_string(&k).unwrap();
+            let back: ViolationKind = serde_json::from_str(&s).unwrap();
+            assert_eq!(k, back);
+        }
     }
 
     #[test]
