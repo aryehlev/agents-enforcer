@@ -48,6 +48,29 @@ const NET_CONFIG_DEFAULT_ACTION: u32 = 1;
 #[cfg(target_os = "linux")]
 const NET_CONFIG_NUM_GATEWAYS: u32 = 2;
 
+// LSM eBPF config slot indices — mirror CONFIG_* in ebpf/lsm.c. Not yet
+// written by any public API; exposed as constants so the wire format is
+// documented in one place when Phase B wires `configure_exec_allowlist`.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const LSM_CONFIG_EXEC_ALLOWLIST_ON: u32 = 4;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const LSM_CONFIG_NUM_EXEC_ALLOW: u32 = 5;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const LSM_CONFIG_BLOCK_MUTATIONS: u32 = 6;
+
+// MUST match MAX_EXEC_ALLOW in ebpf/lsm.c. Bound the allowlist small
+// on purpose: it's an allowlist, not a catalog — if it grows past this
+// we want a louder failure mode than silent truncation.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const MAX_EXEC_ALLOW_ENTRIES: usize = 32;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const EXEC_PATH_LEN: usize = 256;
+
 /// Linux eBPF backend implementation
 ///
 /// This backend uses eBPF programs for network and file access enforcement.
@@ -526,6 +549,40 @@ impl EbpfLinuxBackend {
         net_config.set(NET_CONFIG_NUM_GATEWAYS, entries.len() as u32, 0)?;
 
         Ok(())
+    }
+
+    /// Encode exec-allowlist paths into the fixed-size layout the eBPF
+    /// program expects (null-padded `[u8; EXEC_PATH_LEN]` plus length).
+    ///
+    /// Paths longer than `EXEC_PATH_LEN - 1` are truncated and logged;
+    /// paths beyond `MAX_EXEC_ALLOW_ENTRIES` are dropped with a warning
+    /// so we fail loudly rather than silently allowlisting a prefix.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn build_exec_allowlist_entries(paths: &[String]) -> Vec<([u8; EXEC_PATH_LEN], u16)> {
+        let mut out = Vec::with_capacity(paths.len().min(MAX_EXEC_ALLOW_ENTRIES));
+        for path in paths.iter().take(MAX_EXEC_ALLOW_ENTRIES) {
+            let bytes = path.as_bytes();
+            let mut buf = [0u8; EXEC_PATH_LEN];
+            let len = bytes.len().min(EXEC_PATH_LEN - 1);
+            if bytes.len() > len {
+                tracing::warn!(
+                    "Exec allowlist path '{}' truncated to {} bytes",
+                    path,
+                    len
+                );
+            }
+            buf[..len].copy_from_slice(&bytes[..len]);
+            out.push((buf, len as u16));
+        }
+        if paths.len() > MAX_EXEC_ALLOW_ENTRIES {
+            tracing::warn!(
+                "Exec allowlist truncated: {} entries provided, {} max supported",
+                paths.len(),
+                MAX_EXEC_ALLOW_ENTRIES
+            );
+        }
+        out
     }
 
     /// Turn user-facing `GatewayConfig` into the eBPF-map key/value pairs.
@@ -1250,5 +1307,40 @@ mod tests {
     fn build_gateway_entries_empty_for_no_input() {
         let entries = EbpfLinuxBackend::build_gateway_entries(&[]);
         assert!(entries.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_exec_allowlist_encodes_paths() {
+        let paths = vec![
+            "/usr/bin/python3".to_string(),
+            "/usr/local/bin/agent".to_string(),
+        ];
+        let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&paths);
+        assert_eq!(entries.len(), 2);
+
+        let (buf, len) = &entries[0];
+        assert_eq!(*len as usize, "/usr/bin/python3".len());
+        assert_eq!(&buf[..*len as usize], b"/usr/bin/python3");
+        assert_eq!(buf[*len as usize], 0, "padding past len must be zeroed");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_exec_allowlist_truncates_long_paths() {
+        let long = "/".to_string() + &"a".repeat(EXEC_PATH_LEN + 64);
+        let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&[long]);
+        let (_, len) = &entries[0];
+        assert_eq!(*len as usize, EXEC_PATH_LEN - 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_exec_allowlist_caps_at_max_entries() {
+        let many: Vec<String> = (0..MAX_EXEC_ALLOW_ENTRIES + 5)
+            .map(|i| format!("/bin/bin{}", i))
+            .collect();
+        let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&many);
+        assert_eq!(entries.len(), MAX_EXEC_ALLOW_ENTRIES);
     }
 }
