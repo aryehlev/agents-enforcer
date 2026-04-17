@@ -19,9 +19,12 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-// Keep in sync with agent_gateway_enforcer_common::{GatewayKey,BlockedEvent}.
+// Keep in sync with agent_gateway_enforcer_common::{GatewayKey,PodGatewayKey,BlockedEvent}.
 // If you change these, update agent-gateway-enforcer-common/src/lib.rs.
 #define MAX_GATEWAYS        64
+// Per-pod allowlist capacity. Sized for ~256 pods x 4 rules each on a
+// busy node; raise via CO-RE overrides when profiling shows pressure.
+#define MAX_POD_GATEWAYS    1024
 #define MAX_BLOCKED_ENTRIES 10000
 
 // Protocol constants.
@@ -45,6 +48,16 @@ struct gateway_key {
     __u16 _pad;
 };
 
+// Key for the per-pod allowlist. Mirrors common::PodGatewayKey.
+// cgroup_id of 0 is reserved for the global allowlist and should not be
+// written into this map (use `allowed_gateways` instead).
+struct pod_gateway_key {
+    __u64 cgroup_id;
+    __u32 addr;
+    __u16 port;
+    __u16 _pad;
+};
+
 // Event emitted to userspace when a connect() is decided.
 // Kept compatible with common::BlockedEvent (16 bytes, repr(C)).
 struct net_event {
@@ -57,14 +70,25 @@ struct net_event {
     __u8  _pad[2];
 };
 
-// Allowlist: (addr, port) -> 1. Hash map so userspace can add/remove
-// entries without reshuffling indices.
+// Global allowlist: (addr, port) -> 1. Applies to every cgroup and is
+// checked as a fallback when no per-pod rule matches. `configure_gateways`
+// in userspace still writes here for single-tenant / legacy deployments.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, MAX_GATEWAYS);
     __type(key, struct gateway_key);
     __type(value, __u8);
 } allowed_gateways SEC(".maps");
+
+// Per-pod allowlist: (cgroup_id, addr, port) -> 1. Written by
+// `attach_pod`; entries are scoped to a single pod. The lookup order
+// in `gateway_allowed` is per-pod first, global second.
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAX_POD_GATEWAYS);
+    __type(key, struct pod_gateway_key);
+    __type(value, __u8);
+} allowed_pod_gateways SEC(".maps");
 
 // Per-destination block counter, for metrics. Lossy under pressure; that's fine.
 struct {
@@ -102,6 +126,28 @@ static __always_inline int default_deny(void) {
 }
 
 static __always_inline int gateway_allowed(__u32 addr_be, __u16 port_host) {
+    // --- Per-pod first. A 0 cgroup_id here means "not in a tracked
+    // cgroup" (e.g. host networking); fall through to global in that case.
+    __u64 cgid = bpf_get_current_cgroup_id();
+    if (cgid != 0) {
+        struct pod_gateway_key pkey = {
+            .cgroup_id = cgid,
+            .addr = addr_be,
+            .port = port_host,
+            ._pad = 0,
+        };
+        __u8 *pv = bpf_map_lookup_elem(&allowed_pod_gateways, &pkey);
+        if (pv && *pv)
+            return 1;
+
+        // Wildcard port for this cgroup.
+        pkey.port = 0;
+        pv = bpf_map_lookup_elem(&allowed_pod_gateways, &pkey);
+        if (pv && *pv)
+            return 1;
+    }
+
+    // --- Global allowlist.
     struct gateway_key key = {
         .addr = addr_be,
         .port = port_host,

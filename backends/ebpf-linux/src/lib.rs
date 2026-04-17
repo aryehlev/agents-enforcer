@@ -32,7 +32,7 @@ use aya::{
 };
 
 #[cfg(target_os = "linux")]
-use agent_gateway_enforcer_common::GatewayKey;
+use agent_gateway_enforcer_common::{GatewayKey, PodGatewayKey};
 
 /// Default cgroup v2 mount point used for attaching cgroup/connect4/6 programs
 /// when no per-pod path is configured. Overridable at runtime via the
@@ -101,21 +101,25 @@ pub struct EbpfLinuxBackend {
 
 /// Tracks which pods are attached to which compiled policy bundle.
 ///
-/// Until `BPF_MAP_TYPE_HASH_OF_MAPS` per-cgroup indexing lands (see
-/// docs/k8s-controller-plan.md §4.2), this backend uses shared maps:
-/// `attach_pod` reprograms them with the referenced bundle. Multiple
-/// distinct bundles active simultaneously produce a warning and a
-/// last-attach-wins outcome, and the registry surfaces that in logs
-/// so the controller can detect the collision.
+/// Entries in `attached` carry both the bundle hash and the kernel
+/// cgroup id that was resolved at attach time, so `detach_pod` can
+/// remove the right rows from `allowed_pod_gateways` without
+/// re-stat'ing the cgroup dir (which may already be gone by then).
 #[derive(Default)]
 struct PodRegistry {
     /// Bundles known to the node, keyed by their hash.
     bundles: HashMap<PolicyHash, PolicyBundle>,
-    /// pod UID -> hash currently enforcing it.
-    attached: HashMap<String, PolicyHash>,
+    /// pod UID -> (hash, cgroup id) currently enforcing it.
+    attached: HashMap<String, AttachedPod>,
     /// Bundle hashes that have at least one attached pod. Used to
     /// drop unused bundles on detach without walking `attached`.
     active_hashes: HashSet<PolicyHash>,
+}
+
+#[derive(Clone, Debug)]
+struct AttachedPod {
+    hash: PolicyHash,
+    cgroup_id: u64,
 }
 
 /// eBPF program state (Linux only)
@@ -630,6 +634,148 @@ impl EbpfLinuxBackend {
             .collect()
     }
 
+    /// Variant of `build_gateway_entries` that stamps each entry with a
+    /// cgroup id so it goes into the per-pod map. Used by `attach_pod`.
+    #[cfg(target_os = "linux")]
+    fn build_pod_gateway_entries(
+        cgroup_id: u64,
+        gateways: &[GatewayConfig],
+    ) -> Vec<(PodGatewayKey, u8)> {
+        gateways
+            .iter()
+            .filter(|g| g.enabled)
+            .filter_map(|g| match g.address.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => Some((
+                    PodGatewayKey::new(cgroup_id, u32::from(ip).to_be(), g.port),
+                    1u8,
+                )),
+                Err(_) => {
+                    tracing::warn!(
+                        "Skipping non-IPv4 gateway '{}' for cgroup {}",
+                        g.address,
+                        cgroup_id
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Resolve a cgroup v2 directory to its kernel id (matches the value
+    /// `bpf_get_current_cgroup_id()` returns inside the hook).
+    ///
+    /// On Linux this is simply `stat(path).st_ino`; the kernel reuses the
+    /// kernfs inode number as the cgroup id.
+    #[cfg(target_os = "linux")]
+    fn cgroup_id_for_path(path: &std::path::Path) -> Result<u64> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path)
+            .map_err(|e| anyhow::anyhow!("stat cgroup {}: {}", path.display(), e))?;
+        if !meta.is_dir() {
+            return Err(anyhow::anyhow!(
+                "cgroup path {} is not a directory",
+                path.display()
+            ));
+        }
+        Ok(meta.ino())
+    }
+
+    /// Write `allowed_pod_gateways` entries for a single cgroup.
+    ///
+    /// Replaces (not merges with) any prior entries for this cgroup, so
+    /// reassigning a pod to a different bundle drops the old rules
+    /// atomically from the hook's perspective.
+    #[cfg(target_os = "linux")]
+    fn program_pod_gateways(&self, cgroup_id: u64, gateways: &[GatewayConfig]) -> Result<()> {
+        let entries = Self::build_pod_gateway_entries(cgroup_id, gateways);
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+
+        let bpf = match ebpf_state.network_program.as_mut() {
+            Some(b) => b,
+            None => {
+                tracing::debug!(
+                    "Network program not loaded; pod cgroup {} rules staged in registry only",
+                    cgroup_id
+                );
+                return Ok(());
+            }
+        };
+
+        let mut m: BpfHashMap<_, PodGatewayKey, u8> = bpf
+            .map_mut("allowed_pod_gateways")
+            .ok_or_else(|| anyhow::anyhow!("Map 'allowed_pod_gateways' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bind allowed_pod_gateways map: {}", e))?;
+
+        // Remove stale entries for this cgroup before writing the new set.
+        let stale: Vec<PodGatewayKey> = m
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.cgroup_id == cgroup_id)
+            .collect();
+        for k in stale {
+            let _ = m.remove(&k);
+        }
+
+        for (key, value) in &entries {
+            m.insert(key, value, 0)
+                .map_err(|e| anyhow::anyhow!("insert pod gateway: {}", e))?;
+        }
+
+        // Per-pod rules only take effect if the program is enabled and in
+        // default-deny mode; flip both on if we wrote any entries and the
+        // user hasn't already done so via configure_gateways.
+        if !entries.is_empty() {
+            let mut net_config: Array<_, u32> = bpf
+                .map_mut("net_config")
+                .ok_or_else(|| anyhow::anyhow!("Map 'net_config' not found"))?
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("bind net_config map: {}", e))?;
+            net_config.set(NET_CONFIG_ENABLED, 1u32, 0)?;
+            net_config.set(NET_CONFIG_DEFAULT_ACTION, 1u32, 0)?;
+        }
+
+        tracing::debug!(
+            "Programmed {} gateway entries for cgroup_id={}",
+            entries.len(),
+            cgroup_id
+        );
+        Ok(())
+    }
+
+    /// Drop every `allowed_pod_gateways` entry belonging to `cgroup_id`.
+    /// Called on `detach_pod` and tolerant of the map being absent (stub mode).
+    #[cfg(target_os = "linux")]
+    fn clear_pod_gateways(&self, cgroup_id: u64) -> Result<()> {
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+        let Some(bpf) = ebpf_state.network_program.as_mut() else {
+            return Ok(());
+        };
+        let mut m: BpfHashMap<_, PodGatewayKey, u8> = bpf
+            .map_mut("allowed_pod_gateways")
+            .ok_or_else(|| anyhow::anyhow!("Map 'allowed_pod_gateways' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bind allowed_pod_gateways map: {}", e))?;
+
+        let stale: Vec<PodGatewayKey> = m
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.cgroup_id == cgroup_id)
+            .collect();
+        let n = stale.len();
+        for k in stale {
+            let _ = m.remove(&k);
+        }
+        tracing::debug!("Cleared {} pod gateway entries for cgroup_id={}", n, cgroup_id);
+        Ok(())
+    }
+
     /// Update eBPF maps with file access rules (Linux only)
     #[cfg(target_os = "linux")]
     fn update_file_access_maps(&self, config: &FileAccessConfig) -> Result<()> {
@@ -1082,8 +1228,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
     }
 
     async fn attach_pod(&self, pod: &PodIdentity, policy_hash: &PolicyHash) -> Result<()> {
-        // Stage the assignment in the registry first so a concurrent
-        // update_policy() can see what's referenced and refcount correctly.
+        // Fetch the staged bundle + check idempotency under the registry lock.
         let bundle = {
             let mut reg = self
                 .pod_registry
@@ -1101,63 +1246,85 @@ impl EnforcementBackend for EbpfLinuxBackend {
                 })?
                 .clone();
 
-            // Idempotent: re-attaching the same (pod, hash) is a no-op.
             if let Some(existing) = reg.attached.get(&pod.uid) {
-                if existing == policy_hash {
+                if &existing.hash == policy_hash {
                     return Ok(());
                 }
                 tracing::info!(
                     "Pod {} reassigned from bundle {} to {}",
                     pod.uid,
-                    existing.as_str(),
+                    existing.hash.as_str(),
                     policy_hash.as_str()
-                );
-            }
-            reg.attached.insert(pod.uid.clone(), policy_hash.clone());
-            reg.active_hashes.insert(policy_hash.clone());
-
-            if reg.active_hashes.len() > 1 {
-                tracing::warn!(
-                    "{} distinct bundles active simultaneously; shared-map mode is last-attach-wins until HASH_OF_MAPS lands",
-                    reg.active_hashes.len()
                 );
             }
             bundle
         };
 
-        // Program the shared maps from this bundle. Per-cgroup attach is
-        // tracked in docs/k8s-controller-plan.md §4.2 as the next step.
-        self.configure_gateways(&bundle.gateways).await?;
-        self.configure_file_access(&bundle.file_access).await?;
+        // Resolve the cgroup id now — the path must exist for enforcement
+        // to work. Non-Linux builds skip this entirely.
+        #[cfg(target_os = "linux")]
+        let cgroup_id =
+            Self::cgroup_id_for_path(std::path::Path::new(&pod.cgroup_path))?;
+        #[cfg(not(target_os = "linux"))]
+        let cgroup_id: u64 = 0;
+
+        #[cfg(target_os = "linux")]
+        self.program_pod_gateways(cgroup_id, &bundle.gateways)?;
+
+        // Record the binding only after the map write succeeded; a failed
+        // attach leaves no state to roll back.
+        {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+            reg.attached.insert(
+                pod.uid.clone(),
+                AttachedPod {
+                    hash: policy_hash.clone(),
+                    cgroup_id,
+                },
+            );
+            reg.active_hashes.insert(policy_hash.clone());
+        }
+
         tracing::info!(
-            "Pod {}/{} ({}) now enforcing bundle {}",
+            "Pod {}/{} ({}) attached to bundle {} (cgroup_id={})",
             pod.namespace,
             pod.name,
             pod.uid,
-            policy_hash.as_str()
+            policy_hash.as_str(),
+            cgroup_id
         );
         Ok(())
     }
 
     async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
-        let mut reg = self
-            .pod_registry
-            .lock()
-            .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
-        let Some(hash) = reg.attached.remove(&pod.uid) else {
-            tracing::debug!("detach_pod: {} not attached (already gone?)", pod.uid);
-            return Ok(());
+        let attached = {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+            let Some(a) = reg.attached.remove(&pod.uid) else {
+                tracing::debug!("detach_pod: {} not attached (already gone?)", pod.uid);
+                return Ok(());
+            };
+            let still_referenced = reg.attached.values().any(|v| v.hash == a.hash);
+            if !still_referenced {
+                reg.active_hashes.remove(&a.hash);
+            }
+            a
         };
-        // Drop the active-hash entry only if this was the last pod on it.
-        let still_referenced = reg.attached.values().any(|h| h == &hash);
-        if !still_referenced {
-            reg.active_hashes.remove(&hash);
-            tracing::info!(
-                "Bundle {} no longer referenced; will GC on next update_policy",
-                hash.as_str()
-            );
-        }
-        tracing::info!("Pod {}/{} detached", pod.namespace, pod.name);
+
+        #[cfg(target_os = "linux")]
+        self.clear_pod_gateways(attached.cgroup_id)?;
+
+        tracing::info!(
+            "Pod {}/{} detached (cgroup_id={})",
+            pod.namespace,
+            pod.name,
+            attached.cgroup_id
+        );
         Ok(())
     }
 }
@@ -1462,13 +1629,18 @@ mod tests {
         assert_eq!(entries.len(), MAX_EXEC_ALLOW_ENTRIES);
     }
 
-    fn sample_pod(uid: &str) -> PodIdentity {
-        PodIdentity {
+    /// Build a pod whose cgroup_path is a real tempdir so that the
+    /// attach_pod codepath (which calls `stat()` to learn the cgroup id)
+    /// succeeds without root or mounted cgroup v2 access.
+    fn sample_pod(uid: &str) -> (PodIdentity, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let pod = PodIdentity {
             uid: uid.into(),
             namespace: "prod".into(),
             name: format!("agent-{}", uid),
-            cgroup_path: format!("/sys/fs/cgroup/kubepods.slice/{}", uid),
-        }
+            cgroup_path: dir.path().to_string_lossy().into_owned(),
+        };
+        (pod, dir)
     }
 
     fn sample_bundle(hash: &str) -> PolicyBundle {
@@ -1487,8 +1659,9 @@ mod tests {
     #[tokio::test]
     async fn attach_pod_requires_staged_bundle() {
         let backend = EbpfLinuxBackend::new();
+        let (pod, _tmp) = sample_pod("p1");
         let err = backend
-            .attach_pod(&sample_pod("p1"), &PolicyHash::new("missing"))
+            .attach_pod(&pod, &PolicyHash::new("missing"))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not staged"));
@@ -1505,24 +1678,30 @@ mod tests {
         let bundle = sample_bundle("h1");
         backend.update_policy(&bundle).await.unwrap();
 
-        backend.attach_pod(&sample_pod("p1"), &bundle.hash).await.unwrap();
-        backend.attach_pod(&sample_pod("p2"), &bundle.hash).await.unwrap();
+        let (pod1, _tmp1) = sample_pod("p1");
+        let (pod2, _tmp2) = sample_pod("p2");
+        backend.attach_pod(&pod1, &bundle.hash).await.unwrap();
+        backend.attach_pod(&pod2, &bundle.hash).await.unwrap();
 
         {
             let reg = backend.pod_registry.lock().unwrap();
             assert_eq!(reg.attached.len(), 2);
             assert_eq!(reg.active_hashes.len(), 1);
+            // Every attached entry carries a non-zero cgroup id resolved
+            // via stat() — confirms the codepath ran against the tempdir.
+            for a in reg.attached.values() {
+                assert_ne!(a.cgroup_id, 0, "cgroup_id must be populated");
+            }
         }
 
-        backend.detach_pod(&sample_pod("p1")).await.unwrap();
+        backend.detach_pod(&pod1).await.unwrap();
         {
             let reg = backend.pod_registry.lock().unwrap();
             assert_eq!(reg.attached.len(), 1);
-            // Still referenced by p2.
             assert!(reg.active_hashes.contains(&bundle.hash));
         }
 
-        backend.detach_pod(&sample_pod("p2")).await.unwrap();
+        backend.detach_pod(&pod2).await.unwrap();
         {
             let reg = backend.pod_registry.lock().unwrap();
             assert!(reg.attached.is_empty());
@@ -1539,8 +1718,9 @@ mod tests {
             .unwrap();
         let bundle = sample_bundle("h2");
         backend.update_policy(&bundle).await.unwrap();
-        backend.attach_pod(&sample_pod("p1"), &bundle.hash).await.unwrap();
-        backend.attach_pod(&sample_pod("p1"), &bundle.hash).await.unwrap();
+        let (pod, _tmp) = sample_pod("p1");
+        backend.attach_pod(&pod, &bundle.hash).await.unwrap();
+        backend.attach_pod(&pod, &bundle.hash).await.unwrap();
 
         let reg = backend.pod_registry.lock().unwrap();
         assert_eq!(reg.attached.len(), 1);
@@ -1549,6 +1729,40 @@ mod tests {
     #[tokio::test]
     async fn detach_unknown_pod_is_ok() {
         let backend = EbpfLinuxBackend::new();
-        backend.detach_pod(&sample_pod("ghost")).await.unwrap();
+        let (pod, _tmp) = sample_pod("ghost");
+        backend.detach_pod(&pod).await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_id_for_path_returns_inode_of_tempdir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let id = EbpfLinuxBackend::cgroup_id_for_path(dir.path()).unwrap();
+        assert_ne!(id, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_id_for_path_rejects_nonexistent() {
+        let err = EbpfLinuxBackend::cgroup_id_for_path(
+            std::path::Path::new("/nope/does/not/exist"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("stat cgroup"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_pod_gateway_entries_stamps_cgroup_id() {
+        let gws = vec![GatewayConfig {
+            address: "10.0.0.1".into(),
+            port: 443,
+            enabled: true,
+            description: None,
+        }];
+        let entries = EbpfLinuxBackend::build_pod_gateway_entries(42, &gws);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0.cgroup_id, 42);
+        assert_eq!(entries[0].0.port, 443);
     }
 }
