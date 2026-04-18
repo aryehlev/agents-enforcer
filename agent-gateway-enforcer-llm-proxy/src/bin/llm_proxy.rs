@@ -15,6 +15,7 @@ use agent_gateway_enforcer_llm_proxy::{
     capabilities::{load_from_dir, CapabilityStore},
     handler::{router, AppState},
     metrics_server,
+    pricing::PricingTable,
 };
 use anyhow::Context;
 use clap::Parser;
@@ -43,6 +44,13 @@ struct Args {
     /// The proxy reads this on startup and on SIGHUP.
     #[arg(long, default_value = "/etc/agents-enforcer/capabilities")]
     capabilities_dir: PathBuf,
+
+    /// Path to pricing YAML. Shipped default lives in
+    /// `deploy/pricing/default.yaml`; operators override by mounting
+    /// their own ConfigMap. Reloaded in-place on SIGHUP along with
+    /// capabilities, so a price change doesn't need a rollout.
+    #[arg(long, default_value = "/etc/agents-enforcer/pricing/pricing.yaml")]
+    pricing_file: PathBuf,
 }
 
 #[tokio::main]
@@ -55,34 +63,68 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
 
+    // Load capabilities + pricing.
     let caps = Arc::new(CapabilityStore::new());
     let initial = load_from_dir(&args.capabilities_dir)
         .with_context(|| format!("load caps from {}", args.capabilities_dir.display()))?;
     caps.replace(initial);
-    tracing::info!(count = caps.len(), dir = %args.capabilities_dir.display(), "capabilities loaded");
+    tracing::info!(
+        count = caps.len(),
+        dir = %args.capabilities_dir.display(),
+        "capabilities loaded"
+    );
 
-    // Reload on SIGHUP; operators update the ConfigMap and hup the
-    // pods. The subscribe call panics if streams aren't supported
-    // on this OS — on Linux SIGHUP is defined.
+    let pricing = Arc::new(PricingTable::new());
+    if args.pricing_file.exists() {
+        pricing
+            .reload_from_file(&args.pricing_file)
+            .with_context(|| format!("load pricing from {}", args.pricing_file.display()))?;
+        tracing::info!(
+            count = pricing.len(),
+            file = %args.pricing_file.display(),
+            "pricing loaded"
+        );
+    } else {
+        tracing::warn!(
+            file = %args.pricing_file.display(),
+            "pricing file missing; cost enforcement will reject every request until it's mounted",
+        );
+    }
+
+    // Reload on SIGHUP. One handler refreshes both capabilities and
+    // pricing — operators edit one ConfigMap, hup once, done.
     {
         let caps = caps.clone();
-        let dir = args.capabilities_dir.clone();
+        let pricing = pricing.clone();
+        let cap_dir = args.capabilities_dir.clone();
+        let pricing_file = args.pricing_file.clone();
         tokio::spawn(async move {
-            let mut sig = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
+            let mut sig = match tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::hangup(),
+            ) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(err = %e, "SIGHUP not available; capability reload disabled");
+                    tracing::warn!(err = %e, "SIGHUP unavailable; reload disabled");
                     return;
                 }
             };
             while sig.recv().await.is_some() {
-                match load_from_dir(&dir) {
+                match load_from_dir(&cap_dir) {
                     Ok(new_map) => {
                         let n = new_map.len();
                         caps.replace(new_map);
                         tracing::info!(count = n, "capabilities reloaded via SIGHUP");
                     }
-                    Err(e) => tracing::warn!(err = %e, "SIGHUP reload failed; keeping old set"),
+                    Err(e) => tracing::warn!(err = %e, "capability reload failed; keeping old set"),
+                }
+                if pricing_file.exists() {
+                    match pricing.reload_from_file(&pricing_file) {
+                        Ok(()) => tracing::info!(
+                            count = pricing.len(),
+                            "pricing reloaded via SIGHUP"
+                        ),
+                        Err(e) => tracing::warn!(err = %e, "pricing reload failed; keeping old table"),
+                    }
                 }
             }
         });
@@ -91,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         caps,
         budget: Arc::new(BudgetStore::new()),
+        pricing,
         upstream_base: args.upstream.clone(),
         http: reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))

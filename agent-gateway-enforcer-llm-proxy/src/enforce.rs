@@ -8,7 +8,7 @@
 
 use agent_gateway_enforcer_controller::CapabilityBundle;
 
-use crate::pricing::price_for;
+use crate::pricing::PricingTable;
 
 /// Reason the proxy rejected a request. Maps 1:1 to
 /// `enforcer_llm_rejections_total{reason=...}` labels — keep stable.
@@ -109,11 +109,13 @@ pub struct RequestFacts<'a> {
 
 /// Decide whether to forward. `spent_today` is the running daily
 /// total *before* this request; the caller will add the actual cost
-/// once upstream responds.
+/// once upstream responds. `pricing` is the runtime-loaded table —
+/// a missing entry is treated as "refuse to cost-account".
 pub fn check(
     bundle: &CapabilityBundle,
     req: &RequestFacts<'_>,
     spent_today: f64,
+    pricing: &PricingTable,
 ) -> Result<(), RejectReason> {
     // Model allowlist — empty list means allow nothing.
     let model_lc = req.model.trim().to_ascii_lowercase();
@@ -150,9 +152,11 @@ pub fn check(
     // Cost accounting. `max_daily_spend_usd == 0.0` is the documented
     // "disable cost enforcement" escape hatch; see the CR docs.
     if bundle.max_daily_spend_usd > 0.0 {
-        let price = price_for(req.model).ok_or_else(|| RejectReason::UnknownModel {
-            model: req.model.to_string(),
-        })?;
+        let price = pricing
+            .price_for(req.model)
+            .ok_or_else(|| RejectReason::UnknownModel {
+                model: req.model.to_string(),
+            })?;
         // Use the input estimate as a *lower bound* on what this
         // request costs. Output is unknown until upstream responds.
         let estimated_input = price.input_cost(req.estimated_input_tokens);
@@ -170,6 +174,19 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shared pricing fixture with the handful of models the tests
+    /// actually reference. Keeps every test self-contained.
+    fn fixture_pricing() -> PricingTable {
+        PricingTable::from_yaml_str(
+            r#"
+models:
+  - { name: gpt-4o, inputPerMillion: 2.5, outputPerMillion: 10.0 }
+  - { name: claude-opus-4.7, inputPerMillion: 15.0, outputPerMillion: 75.0 }
+"#,
+        )
+        .unwrap()
+    }
 
     fn bundle_with(models: &[&str], tools: &[&str], spend: f64) -> CapabilityBundle {
         CapabilityBundle {
@@ -192,37 +209,43 @@ mod tests {
 
     #[test]
     fn happy_path_passes() {
+        let p = fixture_pricing();
         let b = bundle_with(&["gpt-4o"], &[], 100.0);
-        check(&b, &req("gpt-4o", vec![], 1000), 0.0).unwrap();
+        check(&b, &req("gpt-4o", vec![], 1000), 0.0, &p).unwrap();
     }
 
     #[test]
     fn model_not_in_list_rejected() {
+        let p = fixture_pricing();
         let b = bundle_with(&["gpt-4o"], &[], 100.0);
-        let e = check(&b, &req("claude-opus-4.7", vec![], 1000), 0.0).unwrap_err();
+        let e = check(&b, &req("claude-opus-4.7", vec![], 1000), 0.0, &p).unwrap_err();
         assert!(matches!(e, RejectReason::ModelNotAllowed { .. }));
     }
 
     #[test]
     fn model_match_is_case_insensitive() {
+        let p = fixture_pricing();
         let b = bundle_with(&["GPT-4o"], &[], 100.0);
-        check(&b, &req("gpt-4o", vec![], 0), 0.0).unwrap();
+        check(&b, &req("gpt-4o", vec![], 0), 0.0, &p).unwrap();
     }
 
     #[test]
     fn tools_with_empty_allowlist_disables_tools() {
+        let p = fixture_pricing();
         let b = bundle_with(&["gpt-4o"], &[], 100.0);
-        let e = check(&b, &req("gpt-4o", vec!["search".into()], 0), 0.0).unwrap_err();
+        let e = check(&b, &req("gpt-4o", vec!["search".into()], 0), 0.0, &p).unwrap_err();
         assert_eq!(e, RejectReason::ToolsDisabled);
     }
 
     #[test]
     fn unlisted_tool_rejected() {
+        let p = fixture_pricing();
         let b = bundle_with(&["gpt-4o"], &["read_file"], 100.0);
         let e = check(
             &b,
             &req("gpt-4o", vec!["send_email".into()], 0),
             0.0,
+            &p,
         )
         .unwrap_err();
         assert!(matches!(e, RejectReason::ToolNotAllowed { .. }));
@@ -230,8 +253,9 @@ mod tests {
 
     #[test]
     fn unknown_model_rejected_when_cost_enforcement_on() {
+        let p = fixture_pricing();
         let b = bundle_with(&["made-up"], &[], 100.0);
-        let e = check(&b, &req("made-up", vec![], 100), 0.0).unwrap_err();
+        let e = check(&b, &req("made-up", vec![], 100), 0.0, &p).unwrap_err();
         assert!(matches!(e, RejectReason::UnknownModel { .. }));
     }
 
@@ -239,32 +263,36 @@ mod tests {
     fn unknown_model_passes_when_cost_enforcement_off() {
         // max_daily_spend_usd == 0.0 → cost check is skipped
         // entirely, see docs on the field.
+        let p = fixture_pricing();
         let b = bundle_with(&["made-up"], &[], 0.0);
-        check(&b, &req("made-up", vec![], 100), 0.0).unwrap();
+        check(&b, &req("made-up", vec![], 100), 0.0, &p).unwrap();
     }
 
     #[test]
     fn budget_exceeded_rejects() {
+        let p = fixture_pricing();
         let b = bundle_with(&["gpt-4o"], &[], 0.01);
         // 10M input tokens on gpt-4o ~ $25, way over a penny.
-        let e = check(&b, &req("gpt-4o", vec![], 10_000_000), 0.0).unwrap_err();
+        let e = check(&b, &req("gpt-4o", vec![], 10_000_000), 0.0, &p).unwrap_err();
         assert!(matches!(e, RejectReason::BudgetExceeded { .. }));
     }
 
     #[test]
     fn budget_already_spent_rejects_even_for_tiny_request() {
+        let p = fixture_pricing();
         let b = bundle_with(&["gpt-4o"], &[], 1.0);
-        let e = check(&b, &req("gpt-4o", vec![], 0), 1.0).unwrap_err();
+        let e = check(&b, &req("gpt-4o", vec![], 0), 1.0, &p).unwrap_err();
         assert!(matches!(e, RejectReason::BudgetExceeded { .. }));
     }
 
     #[test]
     fn output_cap_rejects_higher_request() {
+        let p = fixture_pricing();
         let mut b = bundle_with(&["gpt-4o"], &[], 100.0);
         b.max_output_tokens = Some(512);
         let mut r = req("gpt-4o", vec![], 0);
         r.requested_max_output = Some(1024);
-        let e = check(&b, &r, 0.0).unwrap_err();
+        let e = check(&b, &r, 0.0, &p).unwrap_err();
         assert!(matches!(e, RejectReason::OutputTokenCapExceeded { .. }));
     }
 

@@ -113,6 +113,30 @@ llmProxy:
   #       allowedModels: [gpt-4o-mini]
   #       allowedTools: [search]
   #       maxDailySpendUsd: 25.0
+  # Pricing table. The proxy refuses to forward any model not in
+  # this table, so leaving it empty disables cost enforcement for
+  # every allowed model — set `pricing: null` only if you intend
+  # that. The shipped default mirrors `deploy/pricing/default.yaml`;
+  # operators override per-provider contract terms.
+  pricing:
+    - name: claude-opus-4.7
+      inputPerMillion: 15.0
+      outputPerMillion: 75.0
+    - name: claude-sonnet-4.6
+      inputPerMillion: 3.0
+      outputPerMillion: 15.0
+    - name: claude-haiku-4.5
+      inputPerMillion: 0.8
+      outputPerMillion: 4.0
+    - name: gpt-4o
+      inputPerMillion: 2.5
+      outputPerMillion: 10.0
+    - name: gpt-4o-mini
+      inputPerMillion: 0.15
+      outputPerMillion: 0.6
+    - name: gpt-4-turbo
+      inputPerMillion: 10.0
+      outputPerMillion: 30.0
   resources:
     limits:   { cpu: "1", memory: 512Mi }
     requests: { cpu: 100m, memory: 128Mi }

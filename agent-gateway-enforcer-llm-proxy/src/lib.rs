@@ -22,3 +22,4 @@ pub mod handler;
 pub mod metrics;
 pub mod metrics_server;
 pub mod pricing;
+pub mod providers;

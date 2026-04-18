@@ -35,6 +35,7 @@ spec:
             - --listen=0.0.0.0:{{ .Values.llmProxy.listenPort }}
             - --upstream={{ .Values.llmProxy.upstream }}
             - --capabilities-dir=/etc/agents-enforcer/capabilities
+            - --pricing-file=/etc/agents-enforcer/pricing/pricing.yaml
           env:
             - name: RUST_LOG
               value: info
@@ -62,10 +63,17 @@ spec:
             - name: capabilities
               mountPath: /etc/agents-enforcer/capabilities
               readOnly: true
+            - name: pricing
+              mountPath: /etc/agents-enforcer/pricing
+              readOnly: true
       volumes:
         - name: capabilities
           configMap:
             name: {{ include "agents-enforcer.fullname" . }}-capabilities
+            optional: true
+        - name: pricing
+          configMap:
+            name: {{ include "agents-enforcer.fullname" . }}-pricing
             optional: true
       {{- with .Values.llmProxy.nodeSelector }}
       nodeSelector:
@@ -110,6 +118,31 @@ data:
     {{- range $i, $cap := .Values.llmProxy.capabilities }}
     {{ if $i }}---{{ end }}
     {{ toYaml $cap | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- /*
+  Pricing ConfigMap. `.Values.llmProxy.pricing` is a list of
+  {name, inputPerMillion, outputPerMillion} entries — the proxy's
+  pricing.yaml parser accepts this shape directly. Operators override
+  by passing a different list via --set or a values file; SIGHUP on
+  the pod reloads the table without a restart.
+*/ -}}
+{{- if .Values.llmProxy.pricing }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agents-enforcer.fullname" . }}-pricing
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+data:
+  pricing.yaml: |
+    models:
+    {{- range .Values.llmProxy.pricing }}
+      - name: {{ .name | quote }}
+        inputPerMillion: {{ .inputPerMillion }}
+        outputPerMillion: {{ .outputPerMillion }}
     {{- end }}
 {{- end }}
 {{- end }}
