@@ -1,0 +1,101 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentcapabilities.agents.enforcer.io
+spec:
+  group: agents.enforcer.io
+  names:
+    categories: []
+    kind: AgentCapability
+    plural: agentcapabilities
+    shortNames:
+    - agentcap
+    singular: agentcapability
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.podSelector.matchLabels
+      name: Selector
+      type: string
+    - jsonPath: .spec.maxDailySpendUsd
+      name: Daily $
+      type: number
+    - jsonPath: .spec.allowedModels
+      name: Models
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for AgentCapabilitySpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              L7 capability envelope for an AI agent: which models it's allowed to call, which tools (function names) it can invoke, and how much money it may spend per day. Enforced by `agent-gateway-enforcer-llm-proxy` — the eBPF data plane proves a pod *can only reach* the LLM provider; this CR governs what it's allowed to *ask* for once the TCP connection is up.
+
+              Namespaced on purpose: capabilities are almost always team-scoped, and cost ceilings live at the team level in every org we've talked to.
+            properties:
+              allowedModels:
+                default: []
+                description: Allowed models. Matched case-insensitively against each request's `model` field. Empty list means "deny everything" (explicit so operators can't accidentally open the floodgates by leaving the field off).
+                items:
+                  type: string
+                type: array
+              allowedTools:
+                default: []
+                description: Allowed tool / function names for tool use / function calling. Empty disables tool use entirely — the proxy rejects any request that carries a `tools` array.
+                items:
+                  type: string
+                type: array
+              maxDailySpendUsd:
+                default: 0.0
+                description: Daily USD ceiling aggregated across every call the selected pods make. Hits this → the proxy returns 402 Payment Required until the next UTC day boundary. `0.0` disables cost enforcement (matched binaries are never over-budget); negative values are rejected by the webhook.
+                format: double
+                type: number
+              maxOutputTokens:
+                description: Optional hard cap on a single response's output tokens. Useful to cap runaway "keep writing" prompts without a full cost budget. None = upstream default.
+                format: uint32
+                minimum: 0.0
+                nullable: true
+                type: integer
+              podSelector:
+                description: Selects the pods this capability applies to. Same shape as AgentPolicy so a single team-label matches both a policy and its capabilities.
+                properties:
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                type: object
+            required:
+            - podSelector
+            type: object
+          status:
+            description: Runtime status written back by the controller, matching the same pattern as `AgentPolicyStatus`.
+            nullable: true
+            properties:
+              message:
+                description: Human-readable status line.
+                nullable: true
+                type: string
+              rejections:
+                default: 0
+                description: Count of requests rejected by the proxy because of this capability. Rolling total.
+                format: uint64
+                minimum: 0.0
+                type: integer
+              spentUsdToday:
+                default: 0.0
+                description: Dollars spent today (UTC), best-effort aggregate across all proxy replicas that have selected this capability. Reset at 00:00 UTC.
+                format: double
+                type: number
+            type: object
+        required:
+        - spec
+        title: AgentCapability
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

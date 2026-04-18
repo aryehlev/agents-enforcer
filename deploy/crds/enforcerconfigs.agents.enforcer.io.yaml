@@ -1,0 +1,45 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: enforcerconfigs.agents.enforcer.io
+spec:
+  group: agents.enforcer.io
+  names:
+    categories: []
+    kind: EnforcerConfig
+    plural: enforcerconfigs
+    shortNames:
+    - enfcfg
+    singular: enforcerconfig
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns: []
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for EnforcerConfigSpec via `CustomResource`
+        properties:
+          spec:
+            description: Cluster-scoped singleton for operational knobs. The controller treats `metadata.name == "cluster"` as the canonical instance; additional instances are ignored with a warning.
+            properties:
+              enableTlsInspection:
+                default: false
+                description: When true, the data plane opts into uprobe-based TLS inspection for payload audit. Off by default — this is legally and ethically sensitive and should be opt-in per cluster.
+                type: boolean
+              enabledNamespaces:
+                description: Namespaces the controller enforces. Empty = all namespaces.
+                items:
+                  type: string
+                type: array
+              strictReload:
+                default: false
+                description: When true, policy reloads forcibly drain in-flight flows via RST injection. Off by default to avoid correlated failures during rolling policy changes.
+                type: boolean
+            type: object
+        required:
+        - spec
+        title: EnforcerConfig
+        type: object
+    served: true
+    storage: true
+    subresources: {}

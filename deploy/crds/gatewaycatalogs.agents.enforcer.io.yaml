@@ -1,0 +1,61 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gatewaycatalogs.agents.enforcer.io
+spec:
+  group: agents.enforcer.io
+  names:
+    categories: []
+    kind: GatewayCatalog
+    plural: gatewaycatalogs
+    shortNames:
+    - gwcat
+    singular: gatewaycatalog
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns: []
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for GatewayCatalogSpec via `CustomResource`
+        properties:
+          spec:
+            description: Cluster-scoped catalog of named gateways. Platform teams curate this; app teams reference entries by name from their `AgentPolicy.egress.gatewayRefs`.
+            properties:
+              gateways:
+                description: Named gateway entries. Names are referenced from `AgentPolicy.egress.gatewayRefs`.
+                items:
+                  description: A single entry in a `GatewayCatalog`.
+                  properties:
+                    description:
+                      description: Optional free-form description surfaced in `kubectl describe`.
+                      nullable: true
+                      type: string
+                    host:
+                      description: Target host. Either an IPv4 literal or a DNS name that the controller resolves at compile time (and re-resolves on TTL).
+                      type: string
+                    name:
+                      description: Key that policies reference.
+                      type: string
+                    ports:
+                      description: Ports; empty means "any port".
+                      items:
+                        format: uint16
+                        minimum: 0.0
+                        type: integer
+                      type: array
+                  required:
+                  - host
+                  - name
+                  type: object
+                type: array
+            required:
+            - gateways
+            type: object
+        required:
+        - spec
+        title: GatewayCatalog
+        type: object
+    served: true
+    storage: true
+    subresources: {}

@@ -1,0 +1,40 @@
+# Default LLM pricing for the agents-enforcer LLM proxy.
+#
+# Numbers are USD per 1,000,000 tokens, matching every major provider's
+# public price list. Update this file (or override with your own
+# ConfigMap) whenever a provider changes prices — the proxy reloads
+# in-place on SIGHUP so a rollout is not required.
+#
+# The list of models is intentionally conservative: the proxy refuses
+# to forward a request for a model that isn't priced, so a stale
+# default is safer than a best-guess extrapolation. Add new models as
+# your workloads need them.
+#
+# Shape:
+#   models:
+#     - name: <model-name, case-insensitive>
+#       inputPerMillion: <USD/1M input tokens>
+#       outputPerMillion: <USD/1M output tokens>
+
+models:
+  # --- Anthropic (April 2026 list) ---
+  - name: claude-opus-4.7
+    inputPerMillion: 15.0
+    outputPerMillion: 75.0
+  - name: claude-sonnet-4.6
+    inputPerMillion: 3.0
+    outputPerMillion: 15.0
+  - name: claude-haiku-4.5
+    inputPerMillion: 0.8
+    outputPerMillion: 4.0
+
+  # --- OpenAI (representative pricing; confirm against your contract) ---
+  - name: gpt-4o
+    inputPerMillion: 2.5
+    outputPerMillion: 10.0
+  - name: gpt-4o-mini
+    inputPerMillion: 0.15
+    outputPerMillion: 0.6
+  - name: gpt-4-turbo
+    inputPerMillion: 10.0
+    outputPerMillion: 30.0
