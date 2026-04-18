@@ -16,6 +16,7 @@ use agent_gateway_enforcer_llm_proxy::{
     handler::{router, AppState},
     metrics_server,
     pricing::PricingTable,
+    reporter::EventReporter,
 };
 use anyhow::Context;
 use clap::Parser;
@@ -51,6 +52,13 @@ struct Args {
     /// capabilities, so a price change doesn't need a rollout.
     #[arg(long, default_value = "/etc/agents-enforcer/pricing/pricing.yaml")]
     pricing_file: PathBuf,
+
+    /// Controller's event-ingest URL (ends in `/events/batch`).
+    /// When set, the proxy POSTs a DecisionEvent on every reject so
+    /// the aggregator surfaces `AgentViolation` CRs. Empty =
+    /// disabled; rejects still count toward `llm_rejections_total`.
+    #[arg(long, default_value = "", env = "ENFORCER_EVENTS_URL")]
+    controller_events_url: String,
 }
 
 #[tokio::main]
@@ -130,15 +138,33 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .context("reqwest client")?;
+
+    let reporter = if args.controller_events_url.is_empty() {
+        tracing::info!("reporter disabled (ENFORCER_EVENTS_URL unset)");
+        Arc::new(EventReporter::disabled())
+    } else {
+        tracing::info!(url = %args.controller_events_url, "reporter enabled");
+        Arc::new(EventReporter::start(
+            args.controller_events_url.clone(),
+            http.clone(),
+            // Bounded so a controller outage can't balloon memory.
+            1024,
+            std::time::Duration::from_secs(5),
+            64,
+        ))
+    };
+
     let state = Arc::new(AppState {
         caps,
         budget: Arc::new(BudgetStore::new()),
         pricing,
         upstream_base: args.upstream.clone(),
-        http: reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .build()
-            .context("reqwest client")?,
+        http,
+        reporter,
     });
 
     tracing::info!(

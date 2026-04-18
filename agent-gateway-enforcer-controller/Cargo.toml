@@ -17,6 +17,9 @@ prometheus = { workspace = true }
 once_cell = "1.19"
 axum = { workspace = true }
 chrono = { workspace = true }
+parking_lot = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -34,10 +37,6 @@ clap = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 schemars = { workspace = true }
-
-# SHA-256 for PolicyBundle hash derivation.
-sha2 = "0.10"
-hex = "0.4"
 
 [[bin]]
 name = "enforcer-controller"

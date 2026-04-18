@@ -22,6 +22,7 @@ use crate::enforce::{check, RejectReason, RequestFacts};
 use crate::metrics::{LLM_BUDGET_SPENT, LLM_REJECTIONS, LLM_REQUESTS, LLM_SPEND, LLM_TOKENS};
 use crate::pricing::PricingTable;
 use crate::providers::{Anthropic, OpenAi, Provider, ProviderFacts, ProviderUsage};
+use crate::reporter::{EventReporter, WireEvent};
 use crate::sse::SseParser;
 
 /// Runtime state shared across requests.
@@ -31,6 +32,10 @@ pub struct AppState {
     pub pricing: Arc<PricingTable>,
     pub upstream_base: String,
     pub http: reqwest::Client,
+    /// Best-effort reporter sending `DecisionEvent`s to the
+    /// controller's aggregator. Use `EventReporter::disabled()`
+    /// when the controller endpoint isn't configured.
+    pub reporter: Arc<EventReporter>,
 }
 
 /// Build the axum router. Endpoints map 1:1 to upstream shapes so an
@@ -103,7 +108,7 @@ async fn handle(
 
     let bundle = match state.caps.get(&agent_id) {
         Some(b) => b,
-        None => return deny(&agent_id, &RejectReason::NoCapability),
+        None => return deny_and_report(&state, &agent_id, &RejectReason::NoCapability),
     };
 
     let facts = match provider.extract_facts(&body) {
@@ -125,7 +130,7 @@ async fn handle(
         requested_max_output: facts.requested_max_output,
     };
     if let Err(reason) = check(&bundle, &rf, spent, state.pricing.as_ref()) {
-        return deny(&agent_id, &reason);
+        return deny_and_report(&state, &agent_id, &reason);
     }
 
     forward(state, &agent_id, headers, body, facts, now, provider).await
@@ -368,6 +373,29 @@ fn deny(agent_id: &str, reason: &RejectReason) -> Response {
         StatusCode::from_u16(reason.http_status()).unwrap_or(StatusCode::FORBIDDEN),
         &reason.user_message(),
     )
+}
+
+/// Same as `deny` but also fires a best-effort `DecisionEvent` to
+/// the controller's aggregator so `AgentViolation` CRs surface the
+/// reject. Uses `EgressBlocked` as the ViolationKind — the proxy's
+/// rejections are conceptually egress decisions and a new kind
+/// would require a CRD schema change. The `detail` string carries
+/// the machine-readable reason label so the UI can split by cause.
+fn deny_and_report(state: &AppState, agent_id: &str, reason: &RejectReason) -> Response {
+    if agent_id != "unknown" && !agent_id.is_empty() {
+        if let Some((ns, name)) = agent_id.split_once('/') {
+            state.reporter.report(WireEvent {
+                namespace: ns.to_string(),
+                pod_name: name.to_string(),
+                pod_uid: String::new(), // proxy doesn't know pod UID
+                policy_name: String::new(),
+                kind: "EgressBlocked",
+                detail: format!("{}: {}", reason.metric_label(), reason.user_message()),
+                timestamp: None,
+            });
+        }
+    }
+    deny(agent_id, reason)
 }
 
 fn openai_error(status: StatusCode, message: &str) -> Response {

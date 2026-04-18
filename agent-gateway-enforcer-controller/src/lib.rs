@@ -23,11 +23,15 @@
 
 #![warn(missing_docs)]
 
+pub mod aggregator;
+pub mod aggregator_loop;
 pub mod capability;
 pub mod compiler;
 pub mod controller;
 pub mod crds;
 pub mod distributor;
+pub mod events;
+pub mod events_server;
 pub mod matching;
 pub mod metrics;
 pub mod metrics_server;
@@ -35,7 +39,10 @@ pub mod reconciler;
 pub mod schedule;
 pub mod state;
 
+pub use aggregator::{Aggregator, FlushedViolation};
+pub use aggregator_loop::AggregatorHandle;
 pub use capability::{compile_capability, CapabilityBundle, CapabilityCompileError};
+pub use events::DecisionEvent;
 
 pub use compiler::{compile_policy, CompileError};
 pub use controller::{error_policy, reconcile, run, Context, ControllerConfig, ReconcileLoopError};

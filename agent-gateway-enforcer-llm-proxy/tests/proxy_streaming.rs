@@ -13,6 +13,7 @@ use agent_gateway_enforcer_llm_proxy::{
     capabilities::CapabilityStore,
     handler::{router, AppState},
     pricing::PricingTable,
+    reporter::EventReporter,
 };
 use axum::body::Body;
 use axum::http::StatusCode;
@@ -109,6 +110,7 @@ async fn spawn_proxy(
         pricing,
         upstream_base: upstream.to_string(),
         http: reqwest::Client::new(),
+        reporter: Arc::new(EventReporter::disabled()),
     });
     let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

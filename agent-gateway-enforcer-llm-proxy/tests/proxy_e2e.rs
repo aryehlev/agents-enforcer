@@ -16,6 +16,7 @@ use agent_gateway_enforcer_llm_proxy::{
     capabilities::CapabilityStore,
     handler::{router, AppState},
     pricing::PricingTable,
+    reporter::EventReporter,
 };
 use axum::routing::post;
 use axum::Router;
@@ -83,6 +84,7 @@ async fn spawn_proxy_with(
         pricing,
         upstream_base: upstream.to_string(),
         http: reqwest::Client::new(),
+        reporter: Arc::new(EventReporter::disabled()),
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -249,6 +251,7 @@ async fn readyz_reflects_pricing_loaded() {
         pricing,
         upstream_base: "http://127.0.0.1:1".into(),
         http: reqwest::Client::new(),
+        reporter: Arc::new(EventReporter::disabled()),
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
