@@ -20,6 +20,35 @@ enum Subcommand {
     BuildAll(BuildOptions),
     /// Run the userspace program
     Run(RunOptions),
+    /// Generate CRD YAML manifests into deploy/crds/
+    GenCrds(GenCrdsOptions),
+    /// Compile a policy YAML + catalogs into a PolicyBundle without
+    /// pushing to a cluster. Use to check what a policy will actually
+    /// enforce before applying it.
+    Simulate(SimulateOptions),
+}
+
+#[derive(Debug, Parser)]
+struct GenCrdsOptions {
+    /// Output directory (defaults to <repo>/deploy/crds)
+    #[clap(long)]
+    out_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct SimulateOptions {
+    /// Path to an `AgentPolicy` YAML. Must be a single document, not
+    /// a multi-doc stream — use a `GatewayCatalog` file for catalogs.
+    #[clap(long)]
+    policy: PathBuf,
+    /// Optional paths to `GatewayCatalog` YAMLs referenced by the
+    /// policy. Any number; later files override earlier ones on
+    /// duplicate gateway names.
+    #[clap(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+    /// Output format: `yaml` (default) or `json`.
+    #[clap(long, default_value = "yaml")]
+    format: String,
 }
 
 #[derive(Debug, Parser)]
@@ -59,7 +88,87 @@ fn main() -> Result<()> {
             build_userspace(opts)
         }
         Subcommand::Run(opts) => run(opts),
+        Subcommand::GenCrds(opts) => gen_crds(opts),
+        Subcommand::Simulate(opts) => simulate(opts),
     }
+}
+
+/// Read a policy + its catalogs off disk and print the compiled
+/// bundle. Pure: no kube client, no DNS resolution, no side effects.
+/// Catalog files with hostnames instead of IP literals will fail
+/// compilation with a clear message — the simulator is the recommended
+/// way to validate a policy before `kubectl apply`.
+fn simulate(opts: SimulateOptions) -> Result<()> {
+    use agent_gateway_enforcer_controller::{
+        compile_policy, AgentPolicy, AgentPolicySpec, GatewayCatalog, GatewayCatalogSpec,
+    };
+    use std::collections::BTreeMap;
+
+    let policy_yaml = std::fs::read_to_string(&opts.policy)
+        .with_context(|| format!("read {}", opts.policy.display()))?;
+    let policy: AgentPolicy = serde_yaml::from_str(&policy_yaml)
+        .with_context(|| format!("parse AgentPolicy from {}", opts.policy.display()))?;
+    let spec: AgentPolicySpec = policy.spec;
+
+    let mut catalogs: BTreeMap<String, GatewayCatalogSpec> = BTreeMap::new();
+    for path in &opts.catalogs {
+        let yaml = std::fs::read_to_string(path)
+            .with_context(|| format!("read {}", path.display()))?;
+        let cat: GatewayCatalog = serde_yaml::from_str(&yaml)
+            .with_context(|| format!("parse GatewayCatalog from {}", path.display()))?;
+        // Name collisions overwrite: matches the controller's fetch
+        // behavior (later listings beat earlier ones).
+        let name = cat
+            .metadata
+            .name
+            .clone()
+            .unwrap_or_else(|| "unnamed".into());
+        catalogs.insert(name, cat.spec);
+    }
+
+    let bundle = compile_policy(&spec, &catalogs)
+        .map_err(|e| anyhow::anyhow!("compile failed: {}", e))?;
+
+    match opts.format.as_str() {
+        "yaml" => println!("{}", serde_yaml::to_string(&bundle)?),
+        "json" => println!("{}", serde_json::to_string_pretty(&bundle)?),
+        other => bail!("unknown --format {} (expected yaml|json)", other),
+    }
+    Ok(())
+}
+
+/// Write one YAML file per CRD into `deploy/crds/`. Paired with the
+/// in-tree tests (see `agent-gateway-enforcer-controller` tests) that
+/// verify the CRD definitions round-trip; this task just materializes
+/// them to disk so `kubectl apply -f deploy/crds/` works without the
+/// controller running.
+fn gen_crds(opts: GenCrdsOptions) -> Result<()> {
+    use agent_gateway_enforcer_controller::{
+        AgentCapability, AgentPolicy, AgentViolation, EnforcerConfig, GatewayCatalog,
+    };
+    use kube::CustomResourceExt;
+
+    let out_dir = opts
+        .out_dir
+        .unwrap_or_else(|| project_root().join("deploy").join("crds"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("create {}", out_dir.display()))?;
+
+    let crds: [(&str, serde_yaml::Value); 5] = [
+        ("agentpolicies.agents.enforcer.io.yaml", serde_yaml::to_value(AgentPolicy::crd())?),
+        ("gatewaycatalogs.agents.enforcer.io.yaml", serde_yaml::to_value(GatewayCatalog::crd())?),
+        ("enforcerconfigs.agents.enforcer.io.yaml", serde_yaml::to_value(EnforcerConfig::crd())?),
+        ("agentviolations.agents.enforcer.io.yaml", serde_yaml::to_value(AgentViolation::crd())?),
+        ("agentcapabilities.agents.enforcer.io.yaml", serde_yaml::to_value(AgentCapability::crd())?),
+    ];
+
+    for (name, value) in crds {
+        let path = out_dir.join(name);
+        let yaml = serde_yaml::to_string(&value)?;
+        std::fs::write(&path, yaml).with_context(|| format!("write {}", path.display()))?;
+        println!("wrote {}", path.display());
+    }
+    Ok(())
 }
 
 fn build_ebpf(opts: BuildEbpfOptions) -> Result<()> {

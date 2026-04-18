@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agents-enforcer.controller.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: {{ .Values.controller.replicaCount }}
+  # We'll add leader-election before bumping replicas > 1; keep
+  # Recreate for now so a crashing controller doesn't run 2x briefly.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "agents-enforcer.labels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "agents-enforcer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+      {{- with .Values.controller.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agents-enforcer.serviceAccountName" . }}
+      # Controller is unprivileged — it doesn't touch cgroups or eBPF.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: controller
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          args:
+            - "--distributor={{ .Values.controller.distributor }}"
+            - "--cgroup-template={{ .Values.controller.cgroupTemplate }}"
+            - "--requeue-seconds={{ .Values.controller.requeueSeconds }}"
+            - "--node-agent-port={{ .Values.nodeAgent.grpc.port }}"
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.controller.logLevel | default "info" }}
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

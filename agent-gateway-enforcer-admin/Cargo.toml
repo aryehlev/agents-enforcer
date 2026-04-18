@@ -1,0 +1,29 @@
+[package]
+name = "agent-gateway-enforcer-admin"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "Read-only admin HTTP API + static dashboard for agents-enforcer"
+license = "MIT"
+
+[dependencies]
+agent-gateway-enforcer-controller = { path = "../agent-gateway-enforcer-controller" }
+
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+kube = { workspace = true }
+k8s-openapi = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"] }
+
+[[bin]]
+name = "enforcer-admin"
+path = "src/bin/admin.rs"

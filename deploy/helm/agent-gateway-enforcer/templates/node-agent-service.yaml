@@ -1,0 +1,24 @@
+{{- /*
+  Headless Service fronting the node-agent DaemonSet. The controller's
+  StaticNodeEndpointResolver dials `http://<node-name>:<port>`, and
+  kube-dns resolves a headless Service name to per-pod IPs.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agents-enforcer.nodeAgent.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+  ports:
+    - name: grpc
+      port: {{ .Values.nodeAgent.grpc.port }}
+      targetPort: grpc
+      protocol: TCP

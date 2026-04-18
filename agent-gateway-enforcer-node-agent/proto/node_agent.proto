@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+// gRPC contract between the agents-enforcer controller (control
+// plane, one replica per cluster) and the node-agent (DaemonSet, one
+// replica per node). See docs/k8s-controller-plan.md §4.3.
+//
+// Design notes
+// - Unary, not streaming. Attach / detach flows are low-rate (one
+//   per pod event) and the controller already idempotently retries
+//   via the kube-rs reconcile loop. Streaming would add reconnection
+//   bookkeeping for no real throughput gain at v1alpha1.
+// - The bundle is keyed by sha256 and staged before any AttachPod
+//   references it — the server rejects AttachPod for unknown hashes
+//   so controller/node restarts can't race.
+// - No per-call auth yet. Deployed with mTLS via cert-manager
+//   (Phase C.4) the wire will be encrypted; for v1alpha1 the server
+//   is reached over the node's hostNetwork and bound to 127.0.0.1 on
+//   kind / lab clusters.
+
+package agents.enforcer.v1alpha1;
+
+service NodeAgent {
+  // Stage a compiled bundle. The node keeps it in memory keyed by
+  // `bundle.hash`. Safe to call repeatedly with the same bundle —
+  // the node dedupes by hash.
+  rpc UpdatePolicy(UpdatePolicyRequest) returns (UpdatePolicyResponse);
+
+  // Program per-pod enforcement for a pod already scheduled on this
+  // node. Fails with NotFound if `bundle_hash` hasn't been staged.
+  rpc AttachPod(AttachPodRequest) returns (AttachPodResponse);
+
+  // Stop enforcing on a pod. No-op if the pod was never attached.
+  rpc DetachPod(DetachPodRequest) returns (DetachPodResponse);
+
+  // Health / readiness. Returned `ok=true` means the eBPF programs
+  // are loaded AND attached — kubelet probes use this.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message PodIdentity {
+  string uid = 1;
+  string namespace = 2;
+  string name = 3;
+  string cgroup_path = 4;
+  string node_name = 5;
+}
+
+message GatewayConfig {
+  string address = 1;
+  uint32 port = 2;
+  bool enabled = 3;
+  string description = 4;
+}
+
+message FileAccessConfig {
+  repeated string allowed_paths = 1;
+  repeated string denied_paths = 2;
+  bool default_deny = 3;
+}
+
+message PolicyBundle {
+  string hash = 1;
+  repeated GatewayConfig gateways = 2;
+  FileAccessConfig file_access = 3;
+  repeated string exec_allowlist = 4;
+  bool block_mutations = 5;
+}
+
+message UpdatePolicyRequest {
+  PolicyBundle bundle = 1;
+}
+message UpdatePolicyResponse {}
+
+message AttachPodRequest {
+  PodIdentity pod = 1;
+  string bundle_hash = 2;
+}
+message AttachPodResponse {}
+
+message DetachPodRequest {
+  PodIdentity pod = 1;
+}
+message DetachPodResponse {}
+
+message HealthRequest {}
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+}
