@@ -23,3 +23,4 @@ pub mod metrics;
 pub mod metrics_server;
 pub mod pricing;
 pub mod providers;
+pub mod sse;

@@ -44,11 +44,34 @@ pub trait Provider: Send + Sync {
     /// 400 without the upstream ever being called.
     fn extract_facts(&self, body: &Value) -> Result<ProviderFacts, String>;
 
-    /// Parse usage off the upstream response body. Returns `None`
-    /// when the response is well-formed JSON but carries no usage
-    /// object — the proxy treats that as "forward but don't
-    /// account".
+    /// Parse usage off the upstream **non-streaming** response body.
+    /// Returns `None` when the response is well-formed JSON but
+    /// carries no usage object — the proxy treats that as "forward
+    /// but don't account".
     fn extract_usage(&self, body: &[u8]) -> Option<ProviderUsage>;
+
+    /// Inspect one SSE event from a streamed response and return the
+    /// *cumulative* usage visible so far, or `None` when this event
+    /// doesn't carry usage info.
+    ///
+    /// `event_name` is the `event: …` header (empty string when the
+    /// stream uses OpenAI-style unnamed events). `data` is the raw
+    /// `data: …` payload, minus the prefix, as UTF-8 bytes.
+    ///
+    /// Implementations must be robust to malformed events: the proxy
+    /// passes every chunk through to the client regardless, and a
+    /// parse failure here just means "skip this event for
+    /// accounting". Never panic.
+    fn extract_usage_from_sse(
+        &self,
+        event_name: &str,
+        data: &[u8],
+    ) -> Option<ProviderUsage> {
+        // Default: no usage extraction. Providers without streaming
+        // support (or streams that don't carry usage) inherit this.
+        let _ = (event_name, data);
+        None
+    }
 }
 
 fn estimate_input_tokens(body: &Value) -> u64 {
@@ -130,6 +153,34 @@ impl Provider for OpenAi {
                 .unwrap_or(0),
         })
     }
+
+    fn extract_usage_from_sse(&self, _event: &str, data: &[u8]) -> Option<ProviderUsage> {
+        // OpenAI SSE: plain `data: { … }` lines, unnamed events. The
+        // usage object is present in the *final* chunk only when the
+        // caller set `stream_options: { include_usage: true }`; we
+        // parse every chunk anyway because it's cheap and older
+        // servers sometimes interleave usage earlier.
+        if data == b"[DONE]" {
+            return None;
+        }
+        let v: Value = serde_json::from_slice(data).ok()?;
+        let usage = v.get("usage")?;
+        // A null `usage` field (sentinel emitted on non-final chunks
+        // when `include_usage` is off) must not reset counters.
+        if usage.is_null() {
+            return None;
+        }
+        Some(ProviderUsage {
+            input_tokens: usage
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            output_tokens: usage
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        })
+    }
 }
 
 // -------------------------------------------------------------------
@@ -192,6 +243,48 @@ impl Provider for Anthropic {
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
         })
+    }
+
+    fn extract_usage_from_sse(&self, event: &str, data: &[u8]) -> Option<ProviderUsage> {
+        // Anthropic emits usage in two events:
+        //   event: message_start
+        //   data: { "message": { "usage": { "input_tokens": ... , "output_tokens": 0 } } }
+        //
+        //   event: message_delta
+        //   data: { "usage": { "output_tokens": N } }
+        //
+        // The message_delta only carries an updated output_tokens —
+        // input_tokens is fixed in the opening message_start event.
+        // We merge by returning the latest view we can construct; the
+        // handler keeps running totals across events and picks the
+        // max to avoid regressions from out-of-order chunks.
+        let v: Value = serde_json::from_slice(data).ok()?;
+        match event {
+            "message_start" => {
+                let usage = v.get("message")?.get("usage")?;
+                Some(ProviderUsage {
+                    input_tokens: usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    output_tokens: usage
+                        .get("output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                })
+            }
+            "message_delta" => {
+                let usage = v.get("usage")?;
+                // Only output_tokens moves in message_delta; keep
+                // input_tokens at 0 here and let the handler's max()
+                // preserve whatever message_start set.
+                Some(ProviderUsage {
+                    input_tokens: 0,
+                    output_tokens: usage
+                        .get("output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                })
+            }
+            _ => None,
+        }
     }
 }
 
@@ -271,5 +364,65 @@ mod tests {
     fn provider_names_are_stable_strings() {
         assert_eq!(OpenAi.name(), "openai");
         assert_eq!(Anthropic.name(), "anthropic");
+    }
+
+    #[test]
+    fn openai_sse_done_is_ignored() {
+        assert!(OpenAi.extract_usage_from_sse("", b"[DONE]").is_none());
+    }
+
+    #[test]
+    fn openai_sse_chunk_with_null_usage_is_ignored() {
+        // Non-final delta chunks emit `"usage":null` when
+        // `include_usage` is on. Must not reset running totals.
+        let data = br#"{"choices":[{"delta":{"content":"hi"}}],"usage":null}"#;
+        assert!(OpenAi.extract_usage_from_sse("", data).is_none());
+    }
+
+    #[test]
+    fn openai_sse_final_chunk_carries_usage() {
+        let data = br#"{"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7}}"#;
+        let u = OpenAi.extract_usage_from_sse("", data).unwrap();
+        assert_eq!(u.input_tokens, 42);
+        assert_eq!(u.output_tokens, 7);
+    }
+
+    #[test]
+    fn anthropic_message_start_carries_input_tokens() {
+        let data = br#"{"type":"message_start","message":{"id":"m","usage":{"input_tokens":100,"output_tokens":0}}}"#;
+        let u = Anthropic
+            .extract_usage_from_sse("message_start", data)
+            .unwrap();
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 0);
+    }
+
+    #[test]
+    fn anthropic_message_delta_updates_only_output() {
+        let data = br#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":55}}"#;
+        let u = Anthropic
+            .extract_usage_from_sse("message_delta", data)
+            .unwrap();
+        // input_tokens intentionally 0 here; handler merges via max
+        // against message_start's value.
+        assert_eq!(u.input_tokens, 0);
+        assert_eq!(u.output_tokens, 55);
+    }
+
+    #[test]
+    fn anthropic_unrelated_events_do_not_emit_usage() {
+        let data = br#"{"type":"content_block_delta","delta":{"text":"hi"}}"#;
+        assert!(Anthropic.extract_usage_from_sse("content_block_delta", data).is_none());
+        assert!(Anthropic.extract_usage_from_sse("message_stop", b"{}").is_none());
+    }
+
+    #[test]
+    fn malformed_sse_payload_does_not_panic() {
+        // Truncated JSON from a flaky upstream mustn't crash the
+        // proxy — we fall back to "no usage this chunk".
+        assert!(OpenAi.extract_usage_from_sse("", b"{not json").is_none());
+        assert!(Anthropic
+            .extract_usage_from_sse("message_delta", b"{not json")
+            .is_none());
     }
 }

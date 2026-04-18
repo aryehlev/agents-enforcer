@@ -14,12 +14,15 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::Value;
 
+use futures::StreamExt;
+
 use crate::budget::BudgetStore;
 use crate::capabilities::CapabilityStore;
 use crate::enforce::{check, RejectReason, RequestFacts};
 use crate::metrics::{LLM_BUDGET_SPENT, LLM_REJECTIONS, LLM_REQUESTS, LLM_SPEND, LLM_TOKENS};
 use crate::pricing::PricingTable;
-use crate::providers::{Anthropic, OpenAi, Provider, ProviderFacts};
+use crate::providers::{Anthropic, OpenAi, Provider, ProviderFacts, ProviderUsage};
+use crate::sse::SseParser;
 
 /// Runtime state shared across requests.
 pub struct AppState {
@@ -65,7 +68,7 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    handle(state, headers, body, &OpenAi).await
+    handle(state, headers, body, Arc::new(OpenAi)).await
 }
 
 async fn anthropic_messages(
@@ -73,16 +76,19 @@ async fn anthropic_messages(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    handle(state, headers, body, &Anthropic).await
+    handle(state, headers, body, Arc::new(Anthropic)).await
 }
 
 /// Shared request pipeline. Branches only on the provider adapter —
-/// so adding a new provider is a provider impl + a new route.
+/// so adding a new provider is a provider impl + a new route. The
+/// provider is `Arc`'d rather than borrowed so it can outlive the
+/// sync portion of this function into the streaming response's
+/// detached body-stream closure.
 async fn handle(
     state: Arc<AppState>,
     headers: HeaderMap,
     body: Value,
-    provider: &dyn Provider,
+    provider: Arc<dyn Provider>,
 ) -> Response {
     // Agent identity — matches the AgentCapability's `namespace/name`.
     // Pods set this via their SDK's headers config.
@@ -122,17 +128,17 @@ async fn handle(
         return deny(&agent_id, &reason);
     }
 
-    forward(&state, &agent_id, headers, body, facts, now, provider).await
+    forward(state, &agent_id, headers, body, facts, now, provider).await
 }
 
 async fn forward(
-    state: &AppState,
+    state: Arc<AppState>,
     agent_id: &str,
     mut headers: HeaderMap,
     body: Value,
     facts: ProviderFacts,
     now: chrono::DateTime<chrono::Utc>,
-    provider: &dyn Provider,
+    provider: Arc<dyn Provider>,
 ) -> Response {
     // Bridge http 1.x (axum) → http 0.2 (reqwest). Forward only the
     // headers the upstream actually needs; the http-crate version
@@ -189,6 +195,25 @@ async fn forward(
         .unwrap_or("application/json")
         .to_string();
 
+    // Branch on streaming. We key off the upstream's content-type
+    // (`text/event-stream`) rather than the inbound request body
+    // because some upstreams respond with SSE even when the client
+    // didn't explicitly ask — that's the authoritative signal.
+    let is_stream = ctype_str.starts_with("text/event-stream");
+
+    if is_stream && (200..300).contains(&status_code) {
+        return stream_response(
+            state.clone(),
+            agent_id.to_string(),
+            facts,
+            now,
+            provider.clone(),
+            resp,
+            status_code,
+            ctype_str,
+        );
+    }
+
     let body_bytes = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
@@ -203,7 +228,7 @@ async fn forward(
     if is_success {
         if let Some(usage) = provider.extract_usage(&body_bytes) {
             record_success(
-                state,
+                &state,
                 agent_id,
                 &facts.model,
                 usage.input_tokens,
@@ -225,6 +250,83 @@ async fn forward(
         .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::CONTENT_TYPE, ctype_str)
         .body(Body::from(body_bytes))
+        .unwrap()
+}
+
+/// Streaming path. Pipes upstream chunks to the client byte-for-byte
+/// while side-observing SSE events for usage counters. The client
+/// sees exactly what the upstream emits (including keepalive
+/// comments) with no transformation.
+///
+/// Accounting runs in the stream's drop glue: each event's usage is
+/// folded in via `max()` so out-of-order/incremental providers
+/// converge to the right final numbers, and `record_success` is
+/// called exactly once when the stream completes.
+fn stream_response(
+    state: Arc<AppState>,
+    agent_id: String,
+    facts: ProviderFacts,
+    now: chrono::DateTime<chrono::Utc>,
+    provider: Arc<dyn Provider>,
+    resp: reqwest::Response,
+    status_code: u16,
+    ctype_str: String,
+) -> Response {
+    let model = facts.model;
+
+    // The decorated stream observes upstream chunks, feeds them to
+    // the SSE parser + provider extractor, and yields the same bytes
+    // to the client. When the stream ends we emit one accounting
+    // update for the whole call.
+    let decorated = async_stream::stream! {
+        let mut upstream = Box::pin(resp.bytes_stream());
+        let mut parser = SseParser::new();
+        let mut running = ProviderUsage::default();
+        let mut got_any_usage = false;
+
+        while let Some(chunk) = upstream.next().await {
+            let bytes = match chunk {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(err = %e, "upstream stream error mid-response");
+                    break;
+                }
+            };
+            parser.push(&bytes);
+            for ev in parser.drain_events() {
+                if let Some(u) = provider.extract_usage_from_sse(&ev.event, &ev.data) {
+                    running.input_tokens = running.input_tokens.max(u.input_tokens);
+                    running.output_tokens = running.output_tokens.max(u.output_tokens);
+                    got_any_usage = true;
+                }
+            }
+            yield Ok::<_, std::io::Error>(bytes);
+        }
+
+        if got_any_usage {
+            record_success(
+                &state,
+                &agent_id,
+                &model,
+                running.input_tokens,
+                running.output_tokens,
+                now,
+            );
+        } else {
+            LLM_REQUESTS
+                .with_label_values(&[&agent_id, &model, "forwarded"])
+                .inc();
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::BAD_GATEWAY))
+        .header(header::CONTENT_TYPE, ctype_str)
+        // X-Accel-Buffering: no for nginx-style proxies in front of
+        // the pod so SSE actually streams rather than buffering to
+        // EOF before the client sees anything.
+        .header("x-accel-buffering", "no")
+        .body(Body::from_stream(decorated))
         .unwrap()
 }
 
