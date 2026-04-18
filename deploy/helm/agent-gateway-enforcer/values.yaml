@@ -82,6 +82,38 @@ rbac:
 crds:
   install: true
 
+# -------------- Admin dashboard + API -------
+# Read-only HTTP API and static dashboard. Writes still go through
+# kubectl → admission webhook. Enable `ingress` to expose publicly
+# behind your cluster's ingress controller; by default stays inside
+# the cluster for `kubectl port-forward`.
+admin:
+  enabled: true
+  image:
+    repository: ghcr.io/aryehlev/agents-enforcer-admin
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  listenPort: 8080
+  # Prometheus-compatible endpoint used to populate Capability
+  # spend + Overview metrics. Leave empty to serve the API without
+  # live numbers; Prometheus + VictoriaMetrics + Thanos all work.
+  promUrl: ""
+  ingress:
+    enabled: false
+    className: ""
+    host: agents-enforcer.example.com
+    tls: []  # [{ hosts: [agents-enforcer.example.com], secretName: admin-tls }]
+    annotations: {}
+  resources:
+    limits:   { cpu: 200m, memory: 256Mi }
+    requests: { cpu: 50m,  memory: 64Mi  }
+  podAnnotations: {}
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations: []
+  affinity: {}
+
 # -------------- LLM proxy (L7) --------------
 # OpenAI-compatible gateway that enforces AgentCapability CRs —
 # model allowlist, tool/function allowlist, daily USD cap.

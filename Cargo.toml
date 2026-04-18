@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "agent-gateway-enforcer-admin",
     "agent-gateway-enforcer-core",
     "agent-gateway-enforcer-cli",
     "agent-gateway-enforcer-common",
     "agent-gateway-enforcer-controller",
+    "agent-gateway-enforcer-ctl",
     "agent-gateway-enforcer-llm-proxy",
     "agent-gateway-enforcer-node-agent",
     "agent-gateway-enforcer-webhook",
@@ -57,7 +59,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 prometheus = "0.13"
 
 # CLI
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 
 # Web/HTTP
 axum = "0.7"

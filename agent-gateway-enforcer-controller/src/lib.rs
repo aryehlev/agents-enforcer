@@ -42,8 +42,8 @@ pub use controller::{error_policy, reconcile, run, Context, ControllerConfig, Re
 pub use crds::{
     ActiveWindow, AgentCapability, AgentCapabilitySpec, AgentCapabilityStatus, AgentPolicy,
     AgentPolicySpec, AgentPolicyStatus, AgentViolation, AgentViolationSpec, EgressAction,
-    EnforcerConfig, EnforcerConfigSpec, GatewayCatalog, GatewayCatalogSpec, LabelSelector,
-    Schedule, ViolationKind, Weekday,
+    EgressPolicy, EnforcerConfig, EnforcerConfigSpec, GatewayCatalog, GatewayCatalogSpec,
+    LabelSelector, Schedule, ViolationKind, Weekday,
 };
 pub use distributor::{
     BundleDistributor, GrpcDistributor, InMemoryDistributor, LoggingDistributor,

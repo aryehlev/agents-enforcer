@@ -1,0 +1,97 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #111;
+  background: #f8f9fa;
+}
+header {
+  background: #1a1d21;
+  color: #f5f6f8;
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.3px; }
+header nav { flex: 1; display: flex; gap: 4px; }
+header nav button {
+  background: transparent;
+  color: #c5c8cd;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  font: inherit;
+}
+header nav button.active { background: #2f3439; color: #fff; }
+header nav button:hover { color: #fff; }
+#nsFilter { display: flex; align-items: center; gap: 8px; }
+#nsFilter input {
+  padding: 4px 8px;
+  border: 1px solid #3a3f45;
+  background: #2f3439;
+  color: #fff;
+  border-radius: 3px;
+  width: 160px;
+}
+#refreshBtn {
+  background: #2f3439;
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+main { padding: 20px; }
+.tab { display: none; }
+.tab.active { display: block; }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.card {
+  background: #fff;
+  padding: 16px 20px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  min-width: 180px;
+}
+.card .label { color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.card .value { font-size: 28px; font-weight: 600; margin-top: 4px; color: #111; }
+.hint { color: #6b7280; margin-top: 16px; font-size: 12px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+th, td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #eef0f2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+th {
+  background: #f3f4f6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+  color: #6b7280;
+  font-family: inherit;
+}
+tr:last-child td { border-bottom: none; }
+.kind-egress { color: #b91c1c; }
+.kind-file { color: #0b6bcb; }
+.kind-exec { color: #b45309; }
+.kind-mutation { color: #7c2d12; }
+.util-high { color: #b91c1c; font-weight: 600; }
+.util-warn { color: #b45309; }
+footer {
+  padding: 8px 20px;
+  color: #6b7280;
+  font-size: 11px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+}
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
