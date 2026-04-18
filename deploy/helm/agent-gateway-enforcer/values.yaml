@@ -82,6 +82,46 @@ rbac:
 crds:
   install: true
 
+# -------------- LLM proxy (L7) --------------
+# OpenAI-compatible gateway that enforces AgentCapability CRs —
+# model allowlist, tool/function allowlist, daily USD cap.
+llmProxy:
+  enabled: true
+  image:
+    repository: ghcr.io/aryehlev/agents-enforcer-llm-proxy
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  listenPort: 4180
+  # Where forwarded requests land. Default is OpenAI; override for
+  # LiteLLM / Portkey / an internal proxy.
+  upstream: "https://api.openai.com"
+  # Secret holding provider API keys. The proxy doesn't inject these
+  # itself — callers pass their own Authorization/x-api-key headers
+  # and the proxy forwards them. Set this if you want sidecar-style
+  # injection via an outbound mutation (tracked as follow-up).
+  apiKeySecret: ""
+  # Directory mounted from a ConfigMap of AgentCapability YAML.
+  # Operators bake bundles into `llmProxy.capabilities` for now;
+  # dynamic push from the controller lands in the next phase.
+  capabilities: []
+  #   - apiVersion: agents.enforcer.io/v1alpha1
+  #     kind: AgentCapability
+  #     metadata: { name: ai-agent, namespace: prod }
+  #     spec:
+  #       podSelector: { matchLabels: { app: ai-agent } }
+  #       allowedModels: [gpt-4o-mini]
+  #       allowedTools: [search]
+  #       maxDailySpendUsd: 25.0
+  resources:
+    limits:   { cpu: "1", memory: 512Mi }
+    requests: { cpu: 100m, memory: 128Mi }
+  podAnnotations: {}
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations: []
+  affinity: {}
+
 # -------------- Admission webhook -----------
 webhook:
   enabled: true

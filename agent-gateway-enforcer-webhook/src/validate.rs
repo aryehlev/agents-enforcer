@@ -132,6 +132,7 @@ mod tests {
             file_access: None,
             exec: None,
             block_mutations: false,
+            schedule: None,
         }
     }
 

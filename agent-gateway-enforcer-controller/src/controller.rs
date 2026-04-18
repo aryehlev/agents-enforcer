@@ -225,7 +225,15 @@ async fn reconcile_apply(
     )
     .await;
 
-    Ok(Action::requeue(ctx.config.requeue_interval))
+    // Honor the schedule: when a transition is coming up sooner
+    // than the default requeue interval, reschedule at the
+    // transition so enforcement flips right on the boundary
+    // instead of a requeue_interval later.
+    let requeue = outcome
+        .requeue_after
+        .filter(|d| *d < ctx.config.requeue_interval)
+        .unwrap_or(ctx.config.requeue_interval);
+    Ok(Action::requeue(requeue))
 }
 
 /// Cleanup branch: Kubernetes has set `deletionTimestamp` and is

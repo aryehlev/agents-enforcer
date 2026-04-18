@@ -1,0 +1,115 @@
+{{- if .Values.llmProxy.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agents-enforcer.fullname" . }}-llm-proxy
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-proxy
+spec:
+  replicas: {{ .Values.llmProxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agents-enforcer.labels" . | nindent 6 }}
+      app.kubernetes.io/component: llm-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "agents-enforcer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: llm-proxy
+      {{- with .Values.llmProxy.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agents-enforcer.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: proxy
+          image: "{{ .Values.llmProxy.image.repository }}:{{ .Values.llmProxy.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.llmProxy.image.pullPolicy }}
+          args:
+            - --listen=0.0.0.0:{{ .Values.llmProxy.listenPort }}
+            - --upstream={{ .Values.llmProxy.upstream }}
+            - --capabilities-dir=/etc/agents-enforcer/capabilities
+          env:
+            - name: RUST_LOG
+              value: info
+          ports:
+            - name: http
+              containerPort: {{ .Values.llmProxy.listenPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.llmProxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: capabilities
+              mountPath: /etc/agents-enforcer/capabilities
+              readOnly: true
+      volumes:
+        - name: capabilities
+          configMap:
+            name: {{ include "agents-enforcer.fullname" . }}-capabilities
+            optional: true
+      {{- with .Values.llmProxy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agents-enforcer.fullname" . }}-llm-proxy
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-proxy
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-proxy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+---
+{{- /*
+  Ship capabilities as a single ConfigMap. Operators manage the YAML
+  via GitOps; the proxy SIGHUPs to reload without restart.
+*/ -}}
+{{- if .Values.llmProxy.capabilities }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agents-enforcer.fullname" . }}-capabilities
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+data:
+  capabilities.yaml: |
+    {{- range $i, $cap := .Values.llmProxy.capabilities }}
+    {{ if $i }}---{{ end }}
+    {{ toYaml $cap | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

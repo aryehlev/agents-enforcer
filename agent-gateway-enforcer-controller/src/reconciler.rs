@@ -24,10 +24,11 @@ use std::collections::{BTreeMap, HashSet};
 
 use agent_gateway_enforcer_core::backend::{PodIdentity, PolicyHash};
 
-use crate::compiler::{compile_policy, CompileError};
+use crate::compiler::{compile_inactive, compile_policy, CompileError};
 use crate::crds::{AgentPolicySpec, GatewayCatalogSpec};
 use crate::distributor::BundleDistributor;
 use crate::metrics::{record_reconcile, time_phase};
+use crate::schedule::{is_active, next_transition};
 
 /// Everything [`reconcile_policy`] needs to make a decision without
 /// touching the Kubernetes API. The caller owns each reference — the
@@ -61,6 +62,11 @@ pub struct ReconcileOutcome {
     /// `kubectl describe agentpolicy` for easier triage. `None` means
     /// everything reconciled cleanly.
     pub message: Option<String>,
+    /// When the scheduler wants the controller to re-check this
+    /// policy. `None` means "no pending transition, use the
+    /// default requeue interval". Populated only when
+    /// `policy.spec.schedule` is set.
+    pub requeue_after: Option<std::time::Duration>,
 }
 
 /// Errors that leave the CR in `Degraded`. Compile errors bubble up
@@ -91,15 +97,39 @@ pub async fn reconcile_policy(
     // the reconcile-total counter before bubbling up. The caller
     // (controller.rs) already patches status; the metric is the
     // machine-readable equivalent for dashboards.
-    let bundle = {
+    //
+    // Schedule branch: when the policy has a schedule and the
+    // current wall-clock is outside all active windows, swap the
+    // compiled bundle for the "inactive" shape (typically no
+    // gateways + inactive_action). The hash differs from the active
+    // bundle so node-agents reprogram on transition.
+    let now = chrono::Utc::now();
+    let (bundle, requeue_after) = if let Some(schedule) = &req.policy.schedule {
+        let after = next_transition(schedule, now);
+        if is_active(schedule, now) {
+            let _t = time_phase("compile").start_timer();
+            let b = compile_policy(req.policy, req.catalogs).map_err(|e| {
+                record_reconcile("compile_error");
+                ReconcileError::from(e)
+            })?;
+            (b, after)
+        } else {
+            // Inactive path doesn't hit the compiler's fallible code
+            // path; still record a compile phase-timer to keep the
+            // histogram's {phase=compile} bucket comparable.
+            let _t = time_phase("compile").start_timer();
+            (compile_inactive(req.policy), after)
+        }
+    } else {
         let _t = time_phase("compile").start_timer();
-        match compile_policy(req.policy, req.catalogs) {
+        let b = match compile_policy(req.policy, req.catalogs) {
             Ok(b) => b,
             Err(e) => {
                 record_reconcile("compile_error");
                 return Err(e.into());
             }
-        }
+        };
+        (b, None)
     };
     let bundle_hash = bundle.hash.clone();
 
@@ -142,6 +172,7 @@ pub async fn reconcile_policy(
         bundle_hash,
         enforced_pods: req.matching_pods.len() as u32,
         message: None,
+        requeue_after,
     })
 }
 
@@ -158,6 +189,7 @@ mod tests {
             file_access: None,
             exec: None,
             block_mutations: false,
+            schedule: None,
         }
     }
 

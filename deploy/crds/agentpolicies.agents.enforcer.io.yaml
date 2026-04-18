@@ -111,6 +111,51 @@ spec:
                       type: string
                     type: object
                 type: object
+              schedule:
+                description: Optional schedule. When set, enforcement toggles between the policy's normal rules and the `inactiveAction` default based on wall-clock time. Every reconcile picks the current state and requeues at the next transition, so operators don't need a separate cron controller.
+                nullable: true
+                properties:
+                  activeWindows:
+                    description: One or more active windows (days + HH:MM..HH:MM). At least one required — an empty list is equivalent to "never active", which is an expensive way to spell "delete the policy".
+                    items:
+                      description: A single active window. Days is a list of weekday names (Mon, Tue, …, Sun); `start` / `end` are HH:MM strings. `end` may be earlier than `start` to represent a window that crosses midnight.
+                      properties:
+                        days:
+                          items:
+                            description: English weekday names so CR YAML is readable. No shortening — this isn't a cronline.
+                            enum:
+                            - Mon
+                            - Tue
+                            - Wed
+                            - Thu
+                            - Fri
+                            - Sat
+                            - Sun
+                            type: string
+                          type: array
+                        end:
+                          description: HH:MM, UTC.
+                          type: string
+                        start:
+                          description: HH:MM, UTC.
+                          type: string
+                      required:
+                      - days
+                      - end
+                      - start
+                      type: object
+                    type: array
+                  inactiveAction:
+                    default: Allow
+                    description: What egress defaults to when *outside* every active window. Defaults to Allow so a misconfigured schedule fails open rather than black-holing production traffic.
+                    enum:
+                    - Deny
+                    - Audit
+                    - Allow
+                    type: string
+                required:
+                - activeWindows
+                type: object
             required:
             - podSelector
             type: object

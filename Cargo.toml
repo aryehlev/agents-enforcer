@@ -5,6 +5,7 @@ members = [
     "agent-gateway-enforcer-cli",
     "agent-gateway-enforcer-common",
     "agent-gateway-enforcer-controller",
+    "agent-gateway-enforcer-llm-proxy",
     "agent-gateway-enforcer-node-agent",
     "agent-gateway-enforcer-webhook",
     "backends/ebpf-linux",

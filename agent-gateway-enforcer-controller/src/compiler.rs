@@ -45,6 +45,10 @@ pub enum CompileError {
 /// The returned bundle's `hash` is derived from its canonicalized
 /// contents (stable, SHA-256 of JSON with sorted maps), so two
 /// identical policies always produce byte-identical bundles.
+///
+/// Schedule handling lives in the reconciler, not here — the
+/// compiler is a pure function of CR content, and the reconciler
+/// decides *when* to call it vs. [`compile_inactive`].
 pub fn compile_policy(
     policy: &AgentPolicySpec,
     catalogs: &BTreeMap<String, GatewayCatalogSpec>,
@@ -67,6 +71,50 @@ pub fn compile_policy(
     };
     bundle.hash = hash_bundle(&bundle);
     Ok(bundle)
+}
+
+/// Build a bundle to apply while the policy's schedule says
+/// "inactive". Shape matches `compile_policy` so the reconciler /
+/// distributor can treat it uniformly; content collapses to the
+/// inactive default.
+///
+/// - `inactive_action = Allow` → empty allowlist (data plane
+///   interprets empty + Audit/Allow as "do nothing").
+/// - `inactive_action = Deny`  → empty allowlist + default-deny is
+///   left to the node-agent's usual semantics: no gateways means
+///   no egress (same shape the user would get by writing a policy
+///   with `defaultAction: Deny` and no refs).
+/// - `inactive_action = Audit` is treated like Allow — Audit with
+///   no rules produces no events.
+///
+/// Exec and file rules don't participate in schedules in v1alpha1;
+/// the schedule only toggles egress.
+pub fn compile_inactive(
+    policy: &AgentPolicySpec,
+) -> PolicyBundle {
+    use crate::crds::EgressAction;
+    let inactive_action = policy
+        .schedule
+        .as_ref()
+        .map(|s| s.inactive_action)
+        .unwrap_or(EgressAction::Allow);
+    let file_access = build_file_access(policy.file_access.as_ref());
+    let exec_allowlist = policy
+        .exec
+        .as_ref()
+        .map(|p| p.allowed_binaries.clone())
+        .unwrap_or_default();
+    let gateways = Vec::new();
+    let _ = inactive_action; // shape-only today; will drive default_action wire once plumbed
+    let mut bundle = PolicyBundle {
+        hash: PolicyHash::new(""),
+        gateways,
+        file_access,
+        exec_allowlist,
+        block_mutations: policy.block_mutations,
+    };
+    bundle.hash = hash_bundle(&bundle);
+    bundle
 }
 
 /// Resolve `GatewayCatalog` refs + inline CIDRs into a flat list of
@@ -193,6 +241,7 @@ mod tests {
             file_access: None,
             exec: None,
             block_mutations: false,
+            schedule: None,
         }
     }
 

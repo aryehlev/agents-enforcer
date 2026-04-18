@@ -45,6 +45,7 @@ async fn reconcile_drives_backend_per_pod_api_end_to_end() {
         file_access: None,
         exec: None,
         block_mutations: false,
+        schedule: None,
     };
 
     let dir_a = tempfile::TempDir::new().unwrap();

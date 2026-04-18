@@ -23,6 +23,7 @@
 
 #![warn(missing_docs)]
 
+pub mod capability;
 pub mod compiler;
 pub mod controller;
 pub mod crds;
@@ -31,14 +32,18 @@ pub mod matching;
 pub mod metrics;
 pub mod metrics_server;
 pub mod reconciler;
+pub mod schedule;
 pub mod state;
+
+pub use capability::{compile_capability, CapabilityBundle, CapabilityCompileError};
 
 pub use compiler::{compile_policy, CompileError};
 pub use controller::{error_policy, reconcile, run, Context, ControllerConfig, ReconcileLoopError};
 pub use crds::{
-    AgentPolicy, AgentPolicySpec, AgentPolicyStatus, AgentViolation, AgentViolationSpec,
+    ActiveWindow, AgentCapability, AgentCapabilitySpec, AgentCapabilityStatus, AgentPolicy,
+    AgentPolicySpec, AgentPolicyStatus, AgentViolation, AgentViolationSpec, EgressAction,
     EnforcerConfig, EnforcerConfigSpec, GatewayCatalog, GatewayCatalogSpec, LabelSelector,
-    ViolationKind,
+    Schedule, ViolationKind, Weekday,
 };
 pub use distributor::{
     BundleDistributor, GrpcDistributor, InMemoryDistributor, LoggingDistributor,

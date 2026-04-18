@@ -49,6 +49,62 @@ pub struct AgentPolicySpec {
     /// brick sidecar log rotation.
     #[serde(default)]
     pub block_mutations: bool,
+
+    /// Optional schedule. When set, enforcement toggles between the
+    /// policy's normal rules and the `inactiveAction` default based
+    /// on wall-clock time. Every reconcile picks the current state
+    /// and requeues at the next transition, so operators don't need
+    /// a separate cron controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Schedule>,
+}
+
+/// Wall-clock activation window. UTC-only in v1alpha1 — pinning to
+/// UTC sidesteps DST edge cases and makes the compiled bundle's
+/// effective active state deterministic across controller replicas.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Schedule {
+    /// One or more active windows (days + HH:MM..HH:MM). At least
+    /// one required — an empty list is equivalent to "never active",
+    /// which is an expensive way to spell "delete the policy".
+    pub active_windows: Vec<ActiveWindow>,
+
+    /// What egress defaults to when *outside* every active window.
+    /// Defaults to Allow so a misconfigured schedule fails open
+    /// rather than black-holing production traffic.
+    #[serde(default = "default_inactive_action")]
+    pub inactive_action: EgressAction,
+}
+
+fn default_inactive_action() -> EgressAction {
+    EgressAction::Allow
+}
+
+/// A single active window. Days is a list of weekday names (Mon,
+/// Tue, …, Sun); `start` / `end` are HH:MM strings. `end` may be
+/// earlier than `start` to represent a window that crosses midnight.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveWindow {
+    pub days: Vec<Weekday>,
+    /// HH:MM, UTC.
+    pub start: String,
+    /// HH:MM, UTC.
+    pub end: String,
+}
+
+/// English weekday names so CR YAML is readable. No shortening —
+/// this isn't a cronline.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+pub enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
 }
 
 /// A label selector subset of Kubernetes' `LabelSelector` — we only
@@ -255,6 +311,87 @@ pub enum ViolationKind {
 }
 
 // -------------------------------------------------------------------
+// AgentCapability
+// -------------------------------------------------------------------
+
+/// L7 capability envelope for an AI agent: which models it's allowed
+/// to call, which tools (function names) it can invoke, and how much
+/// money it may spend per day. Enforced by
+/// `agent-gateway-enforcer-llm-proxy` — the eBPF data plane proves
+/// a pod *can only reach* the LLM provider; this CR governs what
+/// it's allowed to *ask* for once the TCP connection is up.
+///
+/// Namespaced on purpose: capabilities are almost always
+/// team-scoped, and cost ceilings live at the team level in every
+/// org we've talked to.
+#[derive(CustomResource, Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[kube(
+    group = "agents.enforcer.io",
+    version = "v1alpha1",
+    kind = "AgentCapability",
+    namespaced,
+    status = "AgentCapabilityStatus",
+    shortname = "agentcap",
+    printcolumn = r#"{"name":"Selector","type":"string","jsonPath":".spec.podSelector.matchLabels"}"#,
+    printcolumn = r#"{"name":"Daily $","type":"number","jsonPath":".spec.maxDailySpendUsd"}"#,
+    printcolumn = r#"{"name":"Models","type":"integer","jsonPath":".spec.allowedModels"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCapabilitySpec {
+    /// Selects the pods this capability applies to. Same shape as
+    /// AgentPolicy so a single team-label matches both a policy
+    /// and its capabilities.
+    pub pod_selector: LabelSelector,
+
+    /// Allowed models. Matched case-insensitively against each
+    /// request's `model` field. Empty list means "deny everything"
+    /// (explicit so operators can't accidentally open the floodgates
+    /// by leaving the field off).
+    #[serde(default)]
+    pub allowed_models: Vec<String>,
+
+    /// Allowed tool / function names for tool use / function
+    /// calling. Empty disables tool use entirely — the proxy
+    /// rejects any request that carries a `tools` array.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+
+    /// Daily USD ceiling aggregated across every call the selected
+    /// pods make. Hits this → the proxy returns 402 Payment
+    /// Required until the next UTC day boundary. `0.0` disables
+    /// cost enforcement (matched binaries are never over-budget);
+    /// negative values are rejected by the webhook.
+    #[serde(default)]
+    pub max_daily_spend_usd: f64,
+
+    /// Optional hard cap on a single response's output tokens.
+    /// Useful to cap runaway "keep writing" prompts without a full
+    /// cost budget. None = upstream default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+}
+
+/// Runtime status written back by the controller, matching the same
+/// pattern as `AgentPolicyStatus`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCapabilityStatus {
+    /// Dollars spent today (UTC), best-effort aggregate across all
+    /// proxy replicas that have selected this capability. Reset at
+    /// 00:00 UTC.
+    #[serde(default)]
+    pub spent_usd_today: f64,
+    /// Count of requests rejected by the proxy because of this
+    /// capability. Rolling total.
+    #[serde(default)]
+    pub rejections: u64,
+    /// Human-readable status line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+// -------------------------------------------------------------------
 // EnforcerConfig
 // -------------------------------------------------------------------
 
@@ -365,6 +502,7 @@ mod tests {
                 allowed_binaries: vec!["/usr/bin/python3".into()],
             }),
             block_mutations: true,
+            schedule: None,
         };
         let yaml = serde_yaml::to_string(&spec).unwrap();
         let back: AgentPolicySpec = serde_yaml::from_str(&yaml).unwrap();
