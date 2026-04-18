@@ -198,8 +198,6 @@ impl ConfigMigrator {
                     config.backend.backend_type = match words[i + 1].to_lowercase().as_str() {
                         "auto" => BackendType::Auto,
                         "ebpf" | "ebpf_linux" => BackendType::EbpfLinux,
-                        "macos" | "macos_desktop" => BackendType::MacOSDesktop,
-                        "windows" | "windows_desktop" => BackendType::WindowsDesktop,
                         _ => {
                             return Err(anyhow::anyhow!(
                                 "Invalid backend in CLI args: {}",

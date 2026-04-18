@@ -391,7 +391,7 @@ async fn test_event_creation_helpers() {
         "/etc/shadow".to_string(),
         FileAccessType::Read,
         Some(5678),
-        EventSource::MacOSDesktop,
+        EventSource::EbpfLinux,
     );
 
     assert_eq!(file_event.event_type, EventType::FileAccess);
@@ -413,7 +413,7 @@ async fn test_event_creation_helpers() {
         SecurityThreatType::Malware,
         SecuritySeverity::High,
         "Malicious file detected".to_string(),
-        EventSource::WindowsDesktop,
+        EventSource::Core,
     );
 
     assert_eq!(security_event.event_type, EventType::Security);
@@ -482,8 +482,6 @@ async fn test_event_severity_from_str() {
 #[tokio::test]
 async fn test_event_source_display() {
     assert_eq!(EventSource::EbpfLinux.to_string(), "ebpf_linux");
-    assert_eq!(EventSource::MacOSDesktop.to_string(), "macos_desktop");
-    assert_eq!(EventSource::WindowsDesktop.to_string(), "windows_desktop");
     assert_eq!(EventSource::Core.to_string(), "core");
 }
 

@@ -58,9 +58,6 @@ async fn main() -> anyhow::Result<()> {
     println!();
     println!("🎯 Attempting to initialize backend...");
 
-    #[cfg(target_os = "macos")]
-    let backend_type = BackendType::MacOSDesktop;
-    #[cfg(target_os = "linux")]
     let backend_type = BackendType::EbpfLinux;
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let backend_type = BackendType::Auto;

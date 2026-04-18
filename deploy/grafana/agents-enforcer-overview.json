@@ -1,0 +1,191 @@
+{
+  "title": "agents-enforcer — overview",
+  "description": "Backed by the enforcer_* Prometheus metrics. Data source must be Prometheus-compatible (Prometheus, VictoriaMetrics, Mimir, Thanos, Cortex).",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["agents-enforcer", "ebpf", "kubernetes"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$ds" },
+        "query": "label_values(enforcer_egress_decisions_total, namespace)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true
+      },
+      {
+        "name": "policy",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$ds" },
+        "query": "label_values(enforcer_egress_decisions_total{namespace=~\"$namespace\"}, policy)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Nodes up",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        { "expr": "sum(enforcer_node_agent_up)", "legendFormat": "nodes" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Reconciles/min",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        { "expr": "sum(rate(enforcer_controller_reconcile_total[5m])) * 60", "legendFormat": "all" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Reconcile errors/min",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        { "expr": "sum(rate(enforcer_controller_reconcile_total{result!=\"ok\"}[5m])) * 60", "legendFormat": "errors" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 1 },
+            { "color": "red", "value": 10 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "gauge",
+      "title": "eBPF map utilization (max)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        { "expr": "max(enforcer_ebpf_map_utilization)", "legendFormat": "util" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100, "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 70 },
+            { "color": "red", "value": 90 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Egress decisions by action",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        {
+          "expr": "sum by (action) (rate(enforcer_egress_decisions_total{namespace=~\"$namespace\", policy=~\"$policy\"}[5m]))",
+          "legendFormat": "{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "File decisions by action",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        {
+          "expr": "sum by (action) (rate(enforcer_file_decisions_total{namespace=~\"$namespace\", policy=~\"$policy\"}[5m]))",
+          "legendFormat": "{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Exec decisions by action",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        {
+          "expr": "sum by (action) (rate(enforcer_exec_decisions_total{namespace=~\"$namespace\", policy=~\"$policy\"}[5m]))",
+          "legendFormat": "{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Policy program latency (p50 / p95 / p99)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (phase, le) (rate(enforcer_policy_program_latency_seconds_bucket[5m])))", "legendFormat": "p50 {{phase}}" },
+        { "expr": "histogram_quantile(0.95, sum by (phase, le) (rate(enforcer_policy_program_latency_seconds_bucket[5m])))", "legendFormat": "p95 {{phase}}" },
+        { "expr": "histogram_quantile(0.99, sum by (phase, le) (rate(enforcer_policy_program_latency_seconds_bucket[5m])))", "legendFormat": "p99 {{phase}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      }
+    },
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Top blocked gateways (last 1h)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        {
+          "expr": "topk(20, sum by (namespace, pod, gateway) (increase(enforcer_egress_decisions_total{action=\"Deny\", namespace=~\"$namespace\"}[1h])))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Top blocked binaries (last 1h)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "$ds" },
+      "targets": [
+        {
+          "expr": "topk(20, sum by (namespace, pod, binary) (increase(enforcer_exec_decisions_total{action=\"Deny\", namespace=~\"$namespace\"}[1h])))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ]
+}

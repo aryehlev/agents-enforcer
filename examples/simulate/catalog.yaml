@@ -1,0 +1,13 @@
+apiVersion: agents.enforcer.io/v1alpha1
+kind: GatewayCatalog
+metadata:
+  name: platform
+spec:
+  gateways:
+    - name: openai
+      host: 1.2.3.4
+      ports: [443]
+      description: "OpenAI API (resolve DNS before applying)"
+    - name: internal-redis
+      host: 10.0.0.5
+      ports: [6379]

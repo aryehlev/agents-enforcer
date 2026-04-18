@@ -1,0 +1,13 @@
+{{- /*
+  Create the namespace unless operators have opted out by setting
+  namespace == Release.Namespace (kube API rejects a namespace whose
+  metadata.name matches the default install target).
+*/ -}}
+{{- if and .Values.namespace (ne .Values.namespace .Release.Namespace) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  labels:
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
+{{- end }}
