@@ -39,7 +39,17 @@ pub trait BundleDistributor: Send + Sync {
     async fn update_policy(&self, bundle: &PolicyBundle) -> Result<()>;
 
     /// Ask the node agent hosting this pod to enforce `bundle_hash`.
-    async fn attach_pod(&self, pod: &PodIdentity, bundle_hash: &PolicyHash) -> Result<()>;
+    ///
+    /// `policy_name` is the AgentPolicy name the bundle came from; it
+    /// travels with the request so the node-agent can label decision
+    /// events back to the originating policy. Pass "" when the caller
+    /// doesn't know (legacy paths, tests).
+    async fn attach_pod(
+        &self,
+        pod: &PodIdentity,
+        bundle_hash: &PolicyHash,
+        policy_name: &str,
+    ) -> Result<()>;
 
     /// Ask the node agent to stop enforcing on this pod. Must tolerate
     /// being called for a pod that never attached.
@@ -69,8 +79,15 @@ impl BundleDistributor for InMemoryDistributor {
         self.backend.update_policy(bundle).await
     }
 
-    async fn attach_pod(&self, pod: &PodIdentity, bundle_hash: &PolicyHash) -> Result<()> {
-        self.backend.attach_pod(pod, bundle_hash).await
+    async fn attach_pod(
+        &self,
+        pod: &PodIdentity,
+        bundle_hash: &PolicyHash,
+        policy_name: &str,
+    ) -> Result<()> {
+        self.backend
+            .attach_pod_with_policy(pod, bundle_hash, policy_name)
+            .await
     }
 
     async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
@@ -219,11 +236,17 @@ impl BundleDistributor for GrpcDistributor {
         .await
     }
 
-    async fn attach_pod(&self, pod: &PodIdentity, bundle_hash: &PolicyHash) -> Result<()> {
+    async fn attach_pod(
+        &self,
+        pod: &PodIdentity,
+        bundle_hash: &PolicyHash,
+        policy_name: &str,
+    ) -> Result<()> {
         let client = self.client_for(&pod.node_name).await?;
         let req = agent_gateway_enforcer_node_agent::AttachPodRequest {
             pod: Some(agent_gateway_enforcer_node_agent::pod_to_proto(pod)),
             bundle_hash: bundle_hash.as_str().to_string(),
+            policy_name: policy_name.to_string(),
         };
         let mut c = client;
         // On first-attach for a node we also need to have seen
@@ -269,11 +292,17 @@ impl BundleDistributor for LoggingDistributor {
         Ok(())
     }
 
-    async fn attach_pod(&self, pod: &PodIdentity, bundle_hash: &PolicyHash) -> Result<()> {
+    async fn attach_pod(
+        &self,
+        pod: &PodIdentity,
+        bundle_hash: &PolicyHash,
+        policy_name: &str,
+    ) -> Result<()> {
         tracing::info!(
             pod = %format!("{}/{}", pod.namespace, pod.name),
             uid = %pod.uid,
             hash = bundle_hash.as_str(),
+            policy = %policy_name,
             "dry-run: attach_pod",
         );
         Ok(())
@@ -313,7 +342,12 @@ pub(crate) mod testing {
             self.updates.lock().unwrap().push(bundle.hash.clone());
             Ok(())
         }
-        async fn attach_pod(&self, pod: &PodIdentity, hash: &PolicyHash) -> Result<()> {
+        async fn attach_pod(
+            &self,
+            pod: &PodIdentity,
+            hash: &PolicyHash,
+            _policy_name: &str,
+        ) -> Result<()> {
             self.attaches
                 .lock()
                 .unwrap()
@@ -351,7 +385,7 @@ mod tests {
         })
         .await
         .unwrap();
-        d.attach_pod(&sample_pod("p1"), &PolicyHash::new("abc"))
+        d.attach_pod(&sample_pod("p1"), &PolicyHash::new("abc"), "")
             .await
             .unwrap();
         d.detach_pod(&sample_pod("p1")).await.unwrap();
@@ -382,7 +416,7 @@ mod tests {
         })
         .await
         .unwrap();
-        d.attach_pod(&sample_pod("p1"), &PolicyHash::new("abc"))
+        d.attach_pod(&sample_pod("p1"), &PolicyHash::new("abc"), "")
             .await
             .unwrap();
         d.detach_pod(&sample_pod("p1")).await.unwrap();

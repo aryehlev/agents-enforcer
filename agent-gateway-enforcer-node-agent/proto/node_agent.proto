@@ -74,6 +74,10 @@ message UpdatePolicyResponse {}
 message AttachPodRequest {
   PodIdentity pod = 1;
   string bundle_hash = 2;
+  // Human-readable AgentPolicy name for labeling decision events
+  // emitted by the data plane. Optional — defaults to empty, which
+  // the aggregator maps to "<unknown>".
+  string policy_name = 3;
 }
 message AttachPodResponse {}
 

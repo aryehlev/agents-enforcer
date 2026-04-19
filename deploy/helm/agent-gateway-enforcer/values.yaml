@@ -22,6 +22,11 @@ controller:
   distributor: grpc
   cgroupTemplate: "/sys/fs/cgroup/kubepods.slice/kubepods-pod{uid}.slice"
   requeueSeconds: 30
+  # HTTP port for the decision-event ingest endpoint. The node-agent
+  # and LLM proxy POST here; the aggregator rolls events up into
+  # AgentViolation CRs.
+  events:
+    port: 9092
   resources:
     limits:   { cpu: 500m,  memory: 256Mi }
     requests: { cpu: 100m,  memory: 128Mi }
@@ -57,6 +62,14 @@ nodeAgent:
   hostPID: true
   hostNetwork: false
   privileged: true
+  # Reporter subscribes to the eBPF ringbuf and POSTs decision events
+  # to the controller's /events/batch endpoint. Disable if you only
+  # want local enforcement without AgentViolation CR visibility.
+  reporter:
+    enabled: true
+    # Override to point at a custom ingest URL (e.g. behind a gateway).
+    # Empty uses the in-cluster controller Service.
+    controllerUrl: ""
 
 # -------------- Metrics ---------------------
 metrics:

@@ -44,6 +44,13 @@ spec:
               value: info
             - name: NODE_NAME
               valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            {{- if .Values.nodeAgent.reporter.enabled }}
+            # When set, the node-agent POSTs decision events
+            # (cgroup/connect blocks, LSM denials) to the controller's
+            # ingest endpoint so they surface as AgentViolation CRs.
+            - name: ENFORCER_EVENTS_URL
+              value: "{{ .Values.nodeAgent.reporter.controllerUrl | default (printf "http://%s.%s.svc:%d/events/batch" (include "agents-enforcer.controller.fullname" .) .Release.Namespace (int .Values.controller.events.port)) }}"
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.nodeAgent.grpc.port }}

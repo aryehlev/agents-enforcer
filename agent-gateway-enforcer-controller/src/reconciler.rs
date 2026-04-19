@@ -35,6 +35,10 @@ use crate::schedule::{is_active, next_transition};
 /// reconciler only reads.
 #[derive(Debug)]
 pub struct ReconcileRequest<'a> {
+    /// Human-readable AgentPolicy name. Passed to the node-agent so
+    /// per-decision events can be labeled with the originating
+    /// policy; empty is fine (aggregator maps it to "<unknown>").
+    pub policy_name: &'a str,
     /// The AgentPolicy being reconciled.
     pub policy: &'a AgentPolicySpec,
     /// Every GatewayCatalog visible to this policy, keyed by catalog
@@ -151,7 +155,10 @@ pub async fn reconcile_policy(
     {
         let _t = time_phase("attach").start_timer();
         for pod in req.matching_pods {
-            if let Err(e) = distributor.attach_pod(pod, &bundle_hash).await {
+            if let Err(e) = distributor
+                .attach_pod(pod, &bundle_hash, req.policy_name)
+                .await
+            {
                 record_reconcile("distribute_error");
                 return Err(ReconcileError::Distribute(e));
             }
@@ -209,6 +216,7 @@ mod tests {
         let matching = vec![pod("a"), pod("b")];
         let outcome = reconcile_policy(
             ReconcileRequest {
+                policy_name: "test",
                 policy: &empty_policy(),
                 catalogs: &BTreeMap::new(),
                 matching_pods: &matching,
@@ -242,6 +250,7 @@ mod tests {
 
         let outcome = reconcile_policy(
             ReconcileRequest {
+                policy_name: "test",
                 policy: &empty_policy(),
                 catalogs: &BTreeMap::new(),
                 matching_pods: &current,
@@ -273,6 +282,7 @@ mod tests {
 
         let err = reconcile_policy(
             ReconcileRequest {
+                policy_name: "test",
                 policy: &policy,
                 catalogs: &BTreeMap::new(),
                 matching_pods: &[pod("a")],
@@ -298,6 +308,7 @@ mod tests {
         // First pass.
         reconcile_policy(
             ReconcileRequest {
+                policy_name: "test",
                 policy: &empty_policy(),
                 catalogs: &BTreeMap::new(),
                 matching_pods: &matching,
@@ -310,6 +321,7 @@ mod tests {
         // Second pass with same inputs.
         reconcile_policy(
             ReconcileRequest {
+                policy_name: "test",
                 policy: &empty_policy(),
                 catalogs: &BTreeMap::new(),
                 matching_pods: &matching,
@@ -336,6 +348,7 @@ mod tests {
         let dist = RecordingDistributor::default();
         reconcile_policy(
             ReconcileRequest {
+                policy_name: "test",
                 policy: &empty_policy(),
                 catalogs: &BTreeMap::new(),
                 matching_pods: &[pod("a")],

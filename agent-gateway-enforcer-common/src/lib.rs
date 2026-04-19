@@ -90,10 +90,18 @@ impl BlockedKey {
     }
 }
 
-/// Event sent from eBPF to userspace when a connection is blocked.
+/// Event sent from eBPF to userspace when a connection is decided.
+///
+/// Mirrors `struct net_event` in `backends/ebpf-linux/ebpf/network.c`.
+/// `cgroup_id` is populated by `bpf_get_current_cgroup_id()` so
+/// userspace can attribute the event back to the enforcing pod via
+/// the per-pod attachment registry; 0 means host-networking /
+/// unattributed.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BlockedEvent {
+    /// Kernel cgroup id of the process that triggered the event.
+    pub cgroup_id: u64,
     /// Source IPv4 address
     pub src_addr: u32,
     /// Destination IPv4 address
@@ -104,9 +112,18 @@ pub struct BlockedEvent {
     pub dst_port: u16,
     /// Protocol (TCP=6, UDP=17)
     pub protocol: u8,
-    /// Padding
-    pub _pad: [u8; 3],
+    /// Event type tag (1 = blocked, 2 = allowed); see
+    /// `NET_EVENT_*` in `network.c`.
+    pub event_type: u8,
+    /// Padding to keep layout 8-byte aligned.
+    pub _pad: [u8; 2],
 }
+
+/// Event-type tag for [`BlockedEvent::event_type`]: connection was denied.
+pub const NET_EVENT_BLOCKED: u8 = 1;
+/// Event-type tag for [`BlockedEvent::event_type`]: connection was allowed
+/// (emitted in audit mode as well as on pass).
+pub const NET_EVENT_ALLOWED: u8 = 2;
 
 // Protocol constants
 pub const IPPROTO_TCP: u8 = 6;
@@ -240,6 +257,75 @@ pub struct FileBlockedEvent {
     pub _pad: u8,
 }
 
+/// Length of the ASCII `comm` field an LSM event carries (matches
+/// `MAX_COMM_LEN` in `lsm.c`).
+pub const COMM_LEN: usize = 16;
+
+/// Event sent from eBPF to userspace on every LSM hook decision.
+///
+/// Mirrors `struct file_event` in `backends/ebpf-linux/ebpf/lsm.c`.
+/// The file-blocking hooks (`file_open`, `bprm_check_security`,
+/// `path_*`) all emit this layout so consumers can switch on
+/// [`Self::event_type`] without per-hook deserialization.
+///
+/// Field order matches the C struct exactly so `ptr::read` over a
+/// ringbuf frame is safe. Size is 296 bytes on a 64-bit target.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FileEvent {
+    /// Kernel cgroup id of the process that triggered the event.
+    pub cgroup_id: u64,
+    /// One of the `FILE_EVENT_*` tags.
+    pub event_type: u32,
+    /// PID of the triggering thread-group leader.
+    pub pid: u32,
+    /// UID of the triggering process.
+    pub uid: u32,
+    /// 0 = allowed, -1 = blocked; set by the hook before emitting.
+    pub action: i32,
+    /// Null-padded `comm` (first 16 bytes of `/proc/<pid>/comm`).
+    pub comm: [u8; COMM_LEN],
+    /// Null-padded path. For `path_*` hooks this is the op tag
+    /// (`unlink` / `mkdir` / `rmdir`) rather than the actual inode path.
+    pub path: [u8; MAX_PATH_LEN],
+}
+
+/// `file_event.event_type` tag: file opened (observed, not blocked).
+pub const FILE_EVENT_OPEN: u32 = 1;
+/// `file_event.event_type` tag: file open was denied.
+pub const FILE_EVENT_BLOCKED: u32 = 2;
+/// `file_event.event_type` tag: `bprm_check_security` denied an exec.
+pub const FILE_EVENT_EXEC_BLOCKED: u32 = 3;
+/// `file_event.event_type` tag: `path_unlink|mkdir|rmdir` denied a mutation.
+pub const FILE_EVENT_PATH_BLOCKED: u32 = 4;
+
+// Userspace helpers — require `std` (for `String`), so gated on the
+// `user` feature. The kernel-side aya Pod impl above stays feature-free.
+#[cfg(any(feature = "user", test))]
+impl FileEvent {
+    /// Return `comm` as a `&str`, trimming the trailing nulls. Invalid
+    /// UTF-8 (rare in real comms, guaranteed by the kernel to be
+    /// printable but just in case) is replaced with the lossy char.
+    pub fn comm_str(&self) -> std::borrow::Cow<'_, str> {
+        let end = self
+            .comm
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(self.comm.len());
+        String::from_utf8_lossy(&self.comm[..end])
+    }
+
+    /// Return `path` as a `&str`, trimming the trailing nulls.
+    pub fn path_str(&self) -> std::borrow::Cow<'_, str> {
+        let end = self
+            .path
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(self.path.len());
+        String::from_utf8_lossy(&self.path[..end])
+    }
+}
+
 #[cfg(target_os = "linux")]
 unsafe impl aya::Pod for GatewayKey {}
 
@@ -260,6 +346,9 @@ unsafe impl aya::Pod for PathRule {}
 
 #[cfg(target_os = "linux")]
 unsafe impl aya::Pod for FileBlockedEvent {}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for FileEvent {}
 
 // ============================================================================
 // CONFIGURATION MODULE (user-space only)
@@ -370,8 +459,33 @@ mod tests {
 
     #[test]
     fn test_blocked_event_size() {
-        // Ensure struct is properly sized for perf events
-        assert_eq!(core::mem::size_of::<BlockedEvent>(), 16);
+        // 8 (cgroup_id) + 4 + 4 + 2 + 2 + 1 + 1 + 2 = 24. Must match
+        // `sizeof(struct net_event)` in `ebpf/network.c`.
+        assert_eq!(core::mem::size_of::<BlockedEvent>(), 24);
+    }
+
+    #[test]
+    fn test_file_event_size() {
+        // 8 (cgroup_id) + 4 + 4 + 4 + 4 + 16 (comm) + 256 (path) = 296.
+        // Must match `sizeof(struct file_event)` in `ebpf/lsm.c`.
+        assert_eq!(core::mem::size_of::<FileEvent>(), 296);
+    }
+
+    #[test]
+    fn file_event_comm_and_path_trim_nulls() {
+        let mut ev = FileEvent {
+            cgroup_id: 42,
+            event_type: FILE_EVENT_BLOCKED,
+            pid: 1,
+            uid: 0,
+            action: -1,
+            comm: [0u8; COMM_LEN],
+            path: [0u8; MAX_PATH_LEN],
+        };
+        ev.comm[..4].copy_from_slice(b"bash");
+        ev.path[..9].copy_from_slice(b"/bin/true");
+        assert_eq!(&*ev.comm_str(), "bash");
+        assert_eq!(&*ev.path_str(), "/bin/true");
     }
 
     // -------------------------------------------------------------------------

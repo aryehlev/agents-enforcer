@@ -171,6 +171,7 @@ async fn reconcile_apply(
 
     let outcome = match reconcile_policy(
         ReconcileRequest {
+            policy_name: &name,
             policy: &policy.spec,
             catalogs: &catalog_map,
             matching_pods: &matching_pods,

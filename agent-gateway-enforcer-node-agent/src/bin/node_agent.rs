@@ -9,7 +9,7 @@ use std::sync::Arc;
 use agent_gateway_enforcer_backend_ebpf_linux::EbpfLinuxBackend;
 use agent_gateway_enforcer_core::backend::{EnforcementBackend, UnifiedConfig};
 use agent_gateway_enforcer_node_agent::{
-    metrics::NODE_AGENT_UP, metrics_server, server::NodeAgentService, NodeAgentServer,
+    metrics::NODE_AGENT_UP, metrics_server, reporter, server::NodeAgentService, NodeAgentServer,
 };
 use anyhow::Context;
 use clap::Parser;
@@ -30,6 +30,13 @@ struct Args {
     /// Bind address for the Prometheus /metrics exporter.
     #[arg(long, default_value = "0.0.0.0:9090")]
     metrics_addr: std::net::SocketAddr,
+
+    /// Controller's event-ingest URL, ending in `/events/batch`. Set
+    /// empty (the default) to run without a reporter — eBPF still
+    /// enforces, but per-decision events aren't surfaced as
+    /// `AgentViolation` CRs.
+    #[arg(long, default_value = "", env = "ENFORCER_EVENTS_URL")]
+    controller_events_url: String,
 }
 
 #[tokio::main]
@@ -50,7 +57,27 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("backend initialize")?;
     backend.start().await.context("backend start")?;
-    let backend: Arc<dyn EnforcementBackend> = Arc::new(backend);
+    let backend = Arc::new(backend);
+
+    // Reporter — subscribes to the backend's decision events and
+    // POSTs to the controller. Disabled when no URL is configured.
+    let _reporter_handle = if args.controller_events_url.is_empty() {
+        tracing::info!("reporter disabled (ENFORCER_EVENTS_URL unset)");
+        None
+    } else {
+        tracing::info!(url = %args.controller_events_url, "reporter enabled");
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("reqwest client")?;
+        let cfg = reporter::ReporterConfig {
+            url: args.controller_events_url.clone(),
+            ..reporter::ReporterConfig::default()
+        };
+        Some(reporter::spawn(backend.as_ref(), http, cfg))
+    };
+
+    let backend: Arc<dyn EnforcementBackend> = backend;
 
     let addr = args
         .listen

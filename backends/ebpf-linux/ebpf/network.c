@@ -58,9 +58,13 @@ struct pod_gateway_key {
     __u16 _pad;
 };
 
-// Event emitted to userspace when a connect() is decided.
-// Kept compatible with common::BlockedEvent (16 bytes, repr(C)).
+// Event emitted to userspace when a connect() is decided. Kept in
+// sync with common::BlockedEvent (24 bytes, repr(C)). cgroup_id lets
+// the node-agent attribute the event to the enforcing pod without a
+// second syscall — ringbuf consumers reverse-lookup it in the
+// per-pod attachment registry.
 struct net_event {
+    __u64 cgroup_id;
     __u32 src_addr;
     __u32 dst_addr;
     __u16 src_port;
@@ -185,6 +189,9 @@ static __always_inline void emit_event(__u8 event_type,
     struct net_event *e = bpf_ringbuf_reserve(&net_events, sizeof(*e), 0);
     if (!e)
         return;
+    // cgroup_id 0 means "host-networking / unattributed"; userspace
+    // treats that as a no-op for attribution but still exports metrics.
+    e->cgroup_id  = bpf_get_current_cgroup_id();
     e->src_addr   = 0;
     e->dst_addr   = dst_addr_be;
     e->src_port   = 0;

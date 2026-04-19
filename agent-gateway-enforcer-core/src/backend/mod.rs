@@ -343,6 +343,20 @@ pub trait EnforcementBackend: Send + Sync {
         ))
     }
 
+    /// Variant of [`Self::attach_pod`] that carries the AgentPolicy
+    /// name for decision-event labeling. Default impl forwards to
+    /// `attach_pod` and ignores the policy name, which is correct for
+    /// backends that don't emit decision events to the controller
+    /// (i.e. anything but eBPF today).
+    async fn attach_pod_with_policy(
+        &self,
+        pod: &PodIdentity,
+        policy_hash: &PolicyHash,
+        _policy_name: &str,
+    ) -> Result<()> {
+        self.attach_pod(pod, policy_hash).await
+    }
+
     /// Detach enforcement from a pod's cgroup.
     ///
     /// Called when the pod terminates or the policy selector stops

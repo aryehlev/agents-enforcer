@@ -9,6 +9,8 @@
 
 #![warn(missing_docs)]
 
+pub mod decision_events;
+
 use agent_gateway_enforcer_core::backend::{
     BackendCapabilities, BackendHealth, BackendType, EnforcementBackend, EventHandler,
     FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector, Platform, PodIdentity,
@@ -21,7 +23,11 @@ use agent_gateway_enforcer_core::events::{
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
+
+use crate::decision_events::{
+    Attributor, DecisionEventSource, DecisionEventWire, PodAttribution, ViolationKind,
+};
 
 // Linux-specific imports for eBPF
 #[cfg(target_os = "linux")]
@@ -97,6 +103,17 @@ pub struct EbpfLinuxBackend {
     metrics: Arc<EbpfMetrics>,
     /// Per-pod enforcement registry (see `pod_registry` for details).
     pod_registry: Arc<Mutex<PodRegistry>>,
+    /// cgroup_id → pod attribution table. Written by `attach_pod` /
+    /// `detach_pod`, read by the ringbuf consumer to translate raw
+    /// kernel events into `DecisionEventWire`. Separate from
+    /// `pod_registry` because the registry is keyed by `pod_uid` and
+    /// the ringbuf arrives with cgroup ids.
+    attribution: Arc<Mutex<Attributor>>,
+    /// Channel for emitting attributed decision events. Subscribers
+    /// (the node-agent reporter, tests) drain via
+    /// `DecisionEventSource::subscribe`. Kept bounded so a slow
+    /// subscriber can only lag, not block the emitter.
+    decisions_tx: broadcast::Sender<DecisionEventWire>,
 }
 
 /// Tracks which pods are attached to which compiled policy bundle.
@@ -120,6 +137,16 @@ struct PodRegistry {
 struct AttachedPod {
     hash: PolicyHash,
     cgroup_id: u64,
+}
+
+/// Pod identity + policy label used to attribute ringbuf events. The
+/// eBPF hooks don't know the pod's name, so the userspace attributor
+/// carries this per cgroup id.
+#[derive(Clone, Debug)]
+pub struct AttachPodContext {
+    /// Human-readable AgentPolicy name. Empty = the controller didn't
+    /// plumb it through; aggregator renders as "<unknown>".
+    pub policy_name: String,
 }
 
 /// eBPF program state (Linux only)
@@ -253,6 +280,12 @@ impl EbpfLinuxBackend {
     pub fn new() -> Self {
         let metrics = Arc::new(EbpfMetrics::new());
 
+        // 2048 is small on purpose: if every pod on a busy node was
+        // blocked simultaneously we'd overflow and lose events, but
+        // that's also a sign the reporter is stuck — losing the
+        // oldest events is better than pausing the ringbuf reader.
+        let (decisions_tx, _) = broadcast::channel::<DecisionEventWire>(2048);
+
         Self {
             state: Arc::new(RwLock::new(BackendState::NotInitialized)),
             config: Arc::new(RwLock::new(UnifiedConfig::default())),
@@ -264,6 +297,60 @@ impl EbpfLinuxBackend {
             event_task: Arc::new(Mutex::new(None)),
             metrics,
             pod_registry: Arc::new(Mutex::new(PodRegistry::default())),
+            attribution: Arc::new(Mutex::new(Attributor::new())),
+            decisions_tx,
+        }
+    }
+
+    /// Test-only hook: push an attribution entry so tests can
+    /// exercise the ringbuf → reporter path without a live kernel.
+    ///
+    /// Only public under `cfg(test)`; the production path is
+    /// `attach_pod_with_context`.
+    #[cfg(test)]
+    fn test_record_attribution(&self, cgroup_id: u64, attr: PodAttribution) {
+        self.attribution.lock().unwrap().insert(cgroup_id, attr);
+    }
+
+    /// Test-only hook: push a fully-formed decision event onto the
+    /// broadcast channel. Lets integration tests exercise
+    /// `DecisionEventSource::subscribe` without a live ringbuf.
+    #[cfg(test)]
+    fn test_emit_decision(&self, ev: DecisionEventWire) -> usize {
+        self.decisions_tx.send(ev).unwrap_or(0)
+    }
+
+    /// Build a [`DecisionEventWire`] from an attributed raw event.
+    /// Caller supplies the already-looked-up [`PodAttribution`] so
+    /// this function stays pure and unit-testable.
+    fn decision_from_net(
+        attr: &PodAttribution,
+        dst_addr_be: u32,
+        dst_port: u16,
+    ) -> DecisionEventWire {
+        let ip = std::net::Ipv4Addr::from(u32::from_be(dst_addr_be));
+        DecisionEventWire::now(
+            &attr.namespace,
+            &attr.pod_name,
+            &attr.pod_uid,
+            &attr.policy_name,
+            ViolationKind::EgressBlocked,
+            format!("{}:{}", ip, dst_port),
+        )
+    }
+
+    /// Map an LSM event_type tag onto a [`ViolationKind`], or `None`
+    /// for tags we don't surface as violations (file_open is emitted
+    /// on every attempted open, including allowed ones).
+    fn lsm_kind_for(event_type: u32) -> Option<ViolationKind> {
+        use agent_gateway_enforcer_common::{
+            FILE_EVENT_BLOCKED, FILE_EVENT_EXEC_BLOCKED, FILE_EVENT_PATH_BLOCKED,
+        };
+        match event_type {
+            FILE_EVENT_BLOCKED => Some(ViolationKind::FileBlocked),
+            FILE_EVENT_EXEC_BLOCKED => Some(ViolationKind::ExecBlocked),
+            FILE_EVENT_PATH_BLOCKED => Some(ViolationKind::MutationBlocked),
+            _ => None,
         }
     }
 
@@ -864,17 +951,167 @@ impl EbpfLinuxBackend {
         }
     }
 
-    /// Start event processing loop (Linux only)
+    /// Take both ringbuf maps out of the loaded eBPF programs and
+    /// spawn tokio tasks that drain them into the decision broadcast
+    /// channel. Called once from `start()`; safe to call again (it
+    /// no-ops on already-drained programs because `take_map` returns
+    /// None the second time). Linux-only because the map types don't
+    /// exist otherwise.
     #[cfg(target_os = "linux")]
-    async fn start_event_processing(&self) -> Result<()> {
-        tracing::info!("Starting eBPF event processing");
+    fn spawn_ringbuf_consumers(&self) -> Result<()> {
+        use aya::maps::RingBuf;
 
-        // TODO: Implement perf buffer reading
-        // - Read network events from network program perf buffer
-        // - Read file events from LSM program perf buffer
-        // - Convert to UnifiedEvent and emit
+        let mut state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ebpf_state lock: {}", e))?;
+
+        if let Some(bpf) = state.network_program.as_mut() {
+            if let Some(map) = bpf.take_map("net_events") {
+                let rb: RingBuf<_> = map
+                    .try_into()
+                    .map_err(|e| anyhow::anyhow!("net_events → RingBuf: {}", e))?;
+                let tx = self.decisions_tx.clone();
+                let attribution = self.attribution.clone();
+                let metrics = self.metrics.clone();
+                tokio::spawn(Self::net_consumer_loop(rb, attribution, tx, metrics));
+                tracing::info!("net_events ringbuf consumer started");
+            } else {
+                tracing::debug!("net_events ringbuf already taken (no consumer started)");
+            }
+        }
+
+        if let Some(bpf) = state.lsm_program.as_mut() {
+            if let Some(map) = bpf.take_map("events") {
+                let rb: RingBuf<_> = map
+                    .try_into()
+                    .map_err(|e| anyhow::anyhow!("events → RingBuf: {}", e))?;
+                let tx = self.decisions_tx.clone();
+                let attribution = self.attribution.clone();
+                let metrics = self.metrics.clone();
+                tokio::spawn(Self::lsm_consumer_loop(rb, attribution, tx, metrics));
+                tracing::info!("lsm events ringbuf consumer started");
+            } else {
+                tracing::debug!("lsm events ringbuf already taken (no consumer started)");
+            }
+        }
 
         Ok(())
+    }
+
+    /// Drain `net_events` and emit attributed `DecisionEventWire`s.
+    /// Polling loop (10ms tick) instead of AsyncFd: ringbuf is 256KB,
+    /// so even at 10ms it only drops events under sustained >25k/s
+    /// decision rates, which is a much louder problem than 10ms lag.
+    #[cfg(target_os = "linux")]
+    async fn net_consumer_loop(
+        mut rb: aya::maps::RingBuf<aya::maps::MapData>,
+        attribution: Arc<Mutex<Attributor>>,
+        tx: broadcast::Sender<DecisionEventWire>,
+        metrics: Arc<EbpfMetrics>,
+    ) {
+        use agent_gateway_enforcer_common::{BlockedEvent, NET_EVENT_BLOCKED};
+        loop {
+            let mut drained = 0usize;
+            while let Some(item) = rb.next() {
+                drained += 1;
+                let bytes: &[u8] = &item;
+                if bytes.len() < std::mem::size_of::<BlockedEvent>() {
+                    continue;
+                }
+                // Safety: the kernel emitter always writes a full
+                // `struct net_event`; the #[repr(C)] layouts line up
+                // field-for-field (verified by the size tests).
+                let ev: BlockedEvent =
+                    unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const BlockedEvent) };
+
+                if ev.event_type == NET_EVENT_BLOCKED {
+                    metrics.increment_network_blocked();
+                } else {
+                    metrics.increment_network_allowed();
+                    // Allowed connects are interesting for audit, but
+                    // we don't surface them as violations.
+                    continue;
+                }
+
+                let attr = {
+                    let guard = match attribution.lock() {
+                        Ok(g) => g,
+                        Err(_) => continue,
+                    };
+                    guard.get(ev.cgroup_id).cloned()
+                };
+                let Some(attr) = attr else {
+                    // Host networking / unattached cgroup — count but
+                    // don't emit. A `tracing::debug!` here is
+                    // intentionally absent because unattributed
+                    // events are expected on every node.
+                    continue;
+                };
+                let wire = Self::decision_from_net(&attr, ev.dst_addr, ev.dst_port);
+                let _ = tx.send(wire);
+            }
+            if drained == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+    }
+
+    /// Same shape as `net_consumer_loop`, but for the LSM ringbuf.
+    /// event_type → ViolationKind mapping lives in `lsm_kind_for`.
+    #[cfg(target_os = "linux")]
+    async fn lsm_consumer_loop(
+        mut rb: aya::maps::RingBuf<aya::maps::MapData>,
+        attribution: Arc<Mutex<Attributor>>,
+        tx: broadcast::Sender<DecisionEventWire>,
+        metrics: Arc<EbpfMetrics>,
+    ) {
+        use agent_gateway_enforcer_common::FileEvent;
+        loop {
+            let mut drained = 0usize;
+            while let Some(item) = rb.next() {
+                drained += 1;
+                let bytes: &[u8] = &item;
+                if bytes.len() < std::mem::size_of::<FileEvent>() {
+                    continue;
+                }
+                let ev: FileEvent =
+                    unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const FileEvent) };
+
+                let Some(kind) = Self::lsm_kind_for(ev.event_type) else {
+                    metrics.increment_file_allowed();
+                    continue;
+                };
+                metrics.increment_file_blocked();
+
+                let attr = {
+                    let guard = match attribution.lock() {
+                        Ok(g) => g,
+                        Err(_) => continue,
+                    };
+                    guard.get(ev.cgroup_id).cloned()
+                };
+                let Some(attr) = attr else {
+                    continue;
+                };
+                // For path-mutation events the "path" field is the op
+                // tag (unlink/mkdir/rmdir); callers presenting this
+                // in a CR treat it as a label either way.
+                let detail = ev.path_str().into_owned();
+                let wire = DecisionEventWire::now(
+                    &attr.namespace,
+                    &attr.pod_name,
+                    &attr.pod_uid,
+                    &attr.policy_name,
+                    kind,
+                    detail,
+                );
+                let _ = tx.send(wire);
+            }
+            if drained == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
     }
 
     /// Set backend state
@@ -1007,6 +1244,14 @@ impl EnforcementBackend for EbpfLinuxBackend {
                 tracing::warn!("Failed to load eBPF programs: {} - running in stub mode", e);
             } else if let Err(e) = self.attach_programs().await {
                 tracing::warn!("Failed to attach eBPF programs: {} - running in stub mode", e);
+            }
+
+            // Ringbuf consumers only run when the programs are
+            // actually loaded; stub mode silently produces no
+            // decision events. Failure here is non-fatal — callers
+            // can still subscribe, they just never receive.
+            if let Err(e) = self.spawn_ringbuf_consumers() {
+                tracing::warn!("Ringbuf consumer setup failed: {}", e);
             }
         }
 
@@ -1228,6 +1473,70 @@ impl EnforcementBackend for EbpfLinuxBackend {
     }
 
     async fn attach_pod(&self, pod: &PodIdentity, policy_hash: &PolicyHash) -> Result<()> {
+        self.attach_pod_inner(pod, policy_hash, None).await
+    }
+
+    async fn attach_pod_with_policy(
+        &self,
+        pod: &PodIdentity,
+        policy_hash: &PolicyHash,
+        policy_name: &str,
+    ) -> Result<()> {
+        let ctx = AttachPodContext {
+            policy_name: policy_name.to_string(),
+        };
+        self.attach_pod_inner(pod, policy_hash, Some(ctx)).await
+    }
+
+    async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
+        let attached = {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+            let Some(a) = reg.attached.remove(&pod.uid) else {
+                tracing::debug!("detach_pod: {} not attached (already gone?)", pod.uid);
+                return Ok(());
+            };
+            let still_referenced = reg.attached.values().any(|v| v.hash == a.hash);
+            if !still_referenced {
+                reg.active_hashes.remove(&a.hash);
+            }
+            a
+        };
+
+        #[cfg(target_os = "linux")]
+        self.clear_pod_gateways(attached.cgroup_id)?;
+
+        // Drop the attribution entry so ringbuf events from this
+        // cgroup no longer resolve; once the kernel reuses the
+        // inode for another pod we'd otherwise mis-attribute.
+        if let Ok(mut a) = self.attribution.lock() {
+            a.remove(attached.cgroup_id);
+        }
+
+        tracing::info!(
+            "Pod {}/{} detached (cgroup_id={})",
+            pod.namespace,
+            pod.name,
+            attached.cgroup_id
+        );
+        Ok(())
+    }
+}
+
+impl EbpfLinuxBackend {
+    /// Shared implementation used by both the trait `attach_pod` and
+    /// the `AttachPodContext`-aware variant. `ctx` carries the
+    /// AgentPolicy name we'll stamp on decision events; callers that
+    /// don't have it pass `None` (→ empty string, aggregator maps to
+    /// "<unknown>").
+    async fn attach_pod_inner(
+        &self,
+        pod: &PodIdentity,
+        policy_hash: &PolicyHash,
+        ctx: Option<AttachPodContext>,
+    ) -> Result<()> {
         // Fetch the staged bundle + check idempotency under the registry lock.
         let bundle = {
             let mut reg = self
@@ -1288,6 +1597,27 @@ impl EnforcementBackend for EbpfLinuxBackend {
             reg.active_hashes.insert(policy_hash.clone());
         }
 
+        // Attribution table powers the ringbuf → DecisionEventWire
+        // translation. Writing after the registry insert keeps the
+        // two views consistent on success; a failed attach never
+        // lands in either.
+        let policy_name = ctx.as_ref().map(|c| c.policy_name.clone()).unwrap_or_default();
+        {
+            let mut attr = self
+                .attribution
+                .lock()
+                .map_err(|e| anyhow::anyhow!("attribution lock: {}", e))?;
+            attr.insert(
+                cgroup_id,
+                PodAttribution {
+                    namespace: pod.namespace.clone(),
+                    pod_name: pod.name.clone(),
+                    pod_uid: pod.uid.clone(),
+                    policy_name,
+                },
+            );
+        }
+
         tracing::info!(
             "Pod {}/{} ({}) attached to bundle {} (cgroup_id={})",
             pod.namespace,
@@ -1299,33 +1629,23 @@ impl EnforcementBackend for EbpfLinuxBackend {
         Ok(())
     }
 
-    async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
-        let attached = {
-            let mut reg = self
-                .pod_registry
-                .lock()
-                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
-            let Some(a) = reg.attached.remove(&pod.uid) else {
-                tracing::debug!("detach_pod: {} not attached (already gone?)", pod.uid);
-                return Ok(());
-            };
-            let still_referenced = reg.attached.values().any(|v| v.hash == a.hash);
-            if !still_referenced {
-                reg.active_hashes.remove(&a.hash);
-            }
-            a
-        };
+    /// Production entry point that also carries the AgentPolicy name.
+    /// The gRPC `AttachPod` handler routes here when the request
+    /// includes `policy_name`; falls back to empty via `attach_pod`
+    /// for older callers.
+    pub async fn attach_pod_with_context(
+        &self,
+        pod: &PodIdentity,
+        policy_hash: &PolicyHash,
+        ctx: AttachPodContext,
+    ) -> Result<()> {
+        self.attach_pod_inner(pod, policy_hash, Some(ctx)).await
+    }
+}
 
-        #[cfg(target_os = "linux")]
-        self.clear_pod_gateways(attached.cgroup_id)?;
-
-        tracing::info!(
-            "Pod {}/{} detached (cgroup_id={})",
-            pod.namespace,
-            pod.name,
-            attached.cgroup_id
-        );
-        Ok(())
+impl DecisionEventSource for EbpfLinuxBackend {
+    fn subscribe(&self) -> broadcast::Receiver<DecisionEventWire> {
+        self.decisions_tx.subscribe()
     }
 }
 
@@ -1336,6 +1656,88 @@ pub mod registry;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Decision event plumbing -----------------------------------
+    // These tests don't touch eBPF — they exercise the pure
+    // attribution + subscribe path so ringbuf/reporter logic can be
+    // verified on hosts without a kernel.
+
+    #[tokio::test]
+    async fn decision_event_subscribe_and_emit() {
+        let backend = EbpfLinuxBackend::new();
+        let mut rx = <EbpfLinuxBackend as DecisionEventSource>::subscribe(&backend);
+        let ev = DecisionEventWire::now(
+            "ns",
+            "p",
+            "u",
+            "pol",
+            ViolationKind::EgressBlocked,
+            "1.2.3.4:443",
+        );
+        backend.test_emit_decision(ev.clone());
+        let got = rx
+            .recv()
+            .await
+            .expect("subscription should receive the emitted event");
+        assert_eq!(got, ev);
+    }
+
+    #[test]
+    fn decision_from_net_formats_detail_as_ip_port() {
+        let attr = PodAttribution {
+            namespace: "prod".into(),
+            pod_name: "agent-0".into(),
+            pod_uid: "uid-A".into(),
+            policy_name: "openai-only".into(),
+        };
+        // kernel emits `dst_addr` as a u32 whose raw bytes match the
+        // network byte order of the IP. Build it the same way a
+        // real emission would, by converting a concrete Ipv4Addr.
+        let ip_be = u32::from(std::net::Ipv4Addr::new(1, 2, 3, 4)).to_be();
+        let ev = EbpfLinuxBackend::decision_from_net(&attr, ip_be, 443);
+        assert_eq!(ev.detail, "1.2.3.4:443");
+        assert_eq!(ev.kind, ViolationKind::EgressBlocked);
+        assert_eq!(ev.namespace, "prod");
+        assert_eq!(ev.policy_name, "openai-only");
+    }
+
+    #[test]
+    fn lsm_kind_for_maps_event_tags() {
+        use agent_gateway_enforcer_common::{
+            FILE_EVENT_BLOCKED, FILE_EVENT_EXEC_BLOCKED, FILE_EVENT_OPEN, FILE_EVENT_PATH_BLOCKED,
+        };
+        assert_eq!(
+            EbpfLinuxBackend::lsm_kind_for(FILE_EVENT_BLOCKED),
+            Some(ViolationKind::FileBlocked)
+        );
+        assert_eq!(
+            EbpfLinuxBackend::lsm_kind_for(FILE_EVENT_EXEC_BLOCKED),
+            Some(ViolationKind::ExecBlocked)
+        );
+        assert_eq!(
+            EbpfLinuxBackend::lsm_kind_for(FILE_EVENT_PATH_BLOCKED),
+            Some(ViolationKind::MutationBlocked)
+        );
+        // Allowed opens map to None — they're audit, not violations.
+        assert_eq!(EbpfLinuxBackend::lsm_kind_for(FILE_EVENT_OPEN), None);
+    }
+
+    #[test]
+    fn attribution_records_on_backend() {
+        let backend = EbpfLinuxBackend::new();
+        backend.test_record_attribution(
+            42,
+            PodAttribution {
+                namespace: "ns".into(),
+                pod_name: "p".into(),
+                pod_uid: "u".into(),
+                policy_name: "pol".into(),
+            },
+        );
+        let g = backend.attribution.lock().unwrap();
+        assert_eq!(g.get(42).unwrap().pod_uid, "u");
+        assert!(g.get(99).is_none());
+    }
 
     #[test]
     fn test_backend_creation() {

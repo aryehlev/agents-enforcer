@@ -36,14 +36,17 @@ struct blocked_path {
     __u32 len;
 };
 
-// Event structure sent to userspace
+// Event structure sent to userspace. cgroup_id is written first so
+// alignment stays 8-byte across the struct. Keep in sync with
+// common::FileEvent.
 struct file_event {
+    __u64 cgroup_id;
     __u32 event_type;
     __u32 pid;
     __u32 uid;
+    __s32 action; // 0 = allowed, -1 = blocked
     char comm[MAX_COMM_LEN];
     char path[MAX_PATH_LEN];
-    __s32 action; // 0 = allowed, -1 = blocked
 };
 
 // Map: blocked process names (indexed by slot)
@@ -188,6 +191,7 @@ static __always_inline void send_event(__u32 event_type, __u32 pid, __u32 uid,
     if (!e)
         return;
 
+    e->cgroup_id = bpf_get_current_cgroup_id();
     e->event_type = event_type;
     e->pid = pid;
     e->uid = uid;

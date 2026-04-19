@@ -54,6 +54,7 @@ async fn reconcile_drives_backend_per_pod_api_end_to_end() {
 
     let outcome = reconcile_policy(
         ReconcileRequest {
+            policy_name: "test",
             policy: &policy,
             catalogs: &BTreeMap::new(),
             matching_pods: &pods,
@@ -74,6 +75,7 @@ async fn reconcile_drives_backend_per_pod_api_end_to_end() {
     // state without error.
     let outcome = reconcile_policy(
         ReconcileRequest {
+            policy_name: "test",
             policy: &policy,
             catalogs: &BTreeMap::new(),
             matching_pods: &pods[..1],

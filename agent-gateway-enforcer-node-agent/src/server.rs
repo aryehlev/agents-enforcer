@@ -70,9 +70,14 @@ impl NodeAgent for NodeAgentService {
         }
         let pod = pod_from_proto(pod);
         let hash = PolicyHash::new(inner.bundle_hash);
-        tracing::debug!(uid = %pod.uid, hash = hash.as_str(), "AttachPod");
+        tracing::debug!(
+            uid = %pod.uid,
+            hash = hash.as_str(),
+            policy = %inner.policy_name,
+            "AttachPod"
+        );
         self.backend
-            .attach_pod(&pod, &hash)
+            .attach_pod_with_policy(&pod, &hash, &inner.policy_name)
             .await
             .map_err(to_status)?;
         Ok(Response::new(AttachPodResponse {}))
@@ -258,6 +263,7 @@ mod tests {
             .attach_pod(Request::new(AttachPodRequest {
                 pod: None,
                 bundle_hash: "h".into(),
+                policy_name: String::new(),
             }))
             .await
             .unwrap_err();
@@ -266,6 +272,7 @@ mod tests {
             .attach_pod(Request::new(AttachPodRequest {
                 pod: Some(sample_pod_proto()),
                 bundle_hash: String::new(),
+                policy_name: String::new(),
             }))
             .await
             .unwrap_err();
@@ -287,6 +294,7 @@ mod tests {
             .attach_pod(Request::new(AttachPodRequest {
                 pod: Some(sample_pod_proto()),
                 bundle_hash: "foo".into(),
+                policy_name: String::new(),
             }))
             .await
             .unwrap_err();
