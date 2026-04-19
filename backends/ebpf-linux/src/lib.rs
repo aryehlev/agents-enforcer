@@ -11,6 +11,7 @@
 
 pub mod decision_events;
 pub mod llm;
+pub mod uprobes;
 
 use agent_gateway_enforcer_core::backend::{
     BackendCapabilities, BackendHealth, BackendType, EnforcementBackend, EventHandler,

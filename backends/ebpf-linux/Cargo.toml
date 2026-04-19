@@ -20,6 +20,10 @@ chrono = { workspace = true }
 toml = "0.8"
 serde_yaml = "0.9"
 parking_lot = "0.12"
+# ELF symbol resolution for the uprobe attachment framework.
+# `object` is the standard Rust crate for this; written by
+# Rust team, no-std-friendly, handles every ELF we care about.
+object = { version = "0.32", default-features = false, features = ["std", "read_core", "elf"] }
 
 # CLI dependencies
 clap = { version = "4.0", features = ["derive"] }
