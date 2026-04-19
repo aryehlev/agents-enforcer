@@ -14,6 +14,11 @@ members = [
     "agent-gateway-enforcer",         # Legacy compatibility shim
     "xtask",
 ]
+# `tls-tap` is a self-contained sub-workspace meant to be extractable
+# into its own repo (see tls-tap/README.md). Exclude it from this
+# workspace so its bpf/ crate (different rustc target, build-std)
+# doesn't pollute parent builds.
+exclude = ["tls-tap"]
 
 # Root package for integration tests
 [package]

@@ -1,0 +1,9 @@
+[package]
+name = "tls-tap-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Wire types shared between the tls-tap eBPF program and userspace consumer. no_std."
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"

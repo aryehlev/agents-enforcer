@@ -1,0 +1,10 @@
+apiVersion: v2
+name: tls-tap
+description: eBPF TLS plaintext sensor (DaemonSet). One pod per node, attaches uprobes to the libssl/Node binaries running there, streams plaintext events to whatever you pipe stdout into.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [ebpf, tls, observability]
+home: https://github.com/aryehlev/tls-tap
+maintainers:
+  - name: aryehlev

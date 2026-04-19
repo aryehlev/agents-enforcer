@@ -1,0 +1,42 @@
+# tls-tap is an opinion-light Helm chart: it installs the DaemonSet
+# and that's it. No CRDs, no service, no controller. The container's
+# stdout is your event stream — point your existing log shipper at
+# it (vector, fluent-bit, otel-collector, …).
+
+image:
+  repository: ghcr.io/aryehlev/tls-tap
+  tag: ""                  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# Comma-separated list of pids to attach to. Empty (default) means
+# "attach to nothing on startup" — operators add pids dynamically
+# via the kubelet exec API or a small sidecar that watches pod
+# starts. A future release adds a built-in pod-watcher.
+attachPids: ""
+
+# Maximum bytes of payload to print per event. The underlying
+# capture is always the eBPF cap (16KB).
+maxPrintBytes: 4096
+
+# Drop ASCII-printable plaintext as plain UTF-8 instead of hex.
+# Off by default — binary garbage corrupts terminals.
+utf8: false
+
+resources:
+  limits:   { cpu: 500m, memory: 256Mi }
+  requests: { cpu: 50m,  memory: 64Mi }
+
+# DaemonSet: one per node. Tolerates control-plane taints so SSH
+# servers / system daemons get covered too.
+nodeSelector:
+  kubernetes.io/os: linux
+tolerations:
+  - operator: Exists
+    effect: NoSchedule
+  - operator: Exists
+    effect: NoExecute
+
+# Required for uprobes (need to read every process's address space)
+# and BPF map operations.
+hostPID: true
+privileged: true

@@ -1,0 +1,64 @@
+# tls-tap workspace.
+#
+# Three crates, one purpose:
+#   - shared/  : repr(C) types crossing the kernel/userspace boundary
+#   - bpf/     : the eBPF program itself, compiled to BPF bytecode
+#   - .        : userspace library + CLI
+#
+# Both kernel- and user-side are Rust. No C, no clang, no Makefile.
+# The BPF crate is built via `cargo build` against the
+# `bpfel-unknown-none` target — see bpf/README.md.
+
+[workspace]
+resolver = "2"
+members = ["shared"]
+# `bpf/` is intentionally NOT in the workspace: it builds for the
+# bpfel-unknown-none target with -Zbuild-std, which would force
+# the host crates to inherit those flags. Built separately via
+# `cargo build -p tls-tap-bpf --target bpfel-unknown-none`.
+exclude = ["bpf"]
+
+[package]
+name = "tls-tap"
+version = "0.1.0"
+edition = "2021"
+description = "eBPF TLS plaintext sensor: captures SSL_write/SSL_read pre-encryption, attributes to cgroup, emits structured events. Pure Rust top to bottom — kernel program (aya-ebpf) and userspace (aya). No policy, no K8s coupling."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aryehlev/tls-tap"
+readme = "README.md"
+keywords = ["ebpf", "tls", "observability", "uprobes", "kubernetes"]
+categories = ["api-bindings", "network-programming"]
+
+[lib]
+name = "tls_tap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tls-tap"
+path = "src/bin/tls_tap.rs"
+required-features = ["cli"]
+
+[dependencies]
+tls-tap-shared = { path = "shared" }
+
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+object = { version = "0.32", default-features = false, features = ["std", "read_core", "elf"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "signal"] }
+
+# CLI (binary only).
+clap = { version = "4", features = ["derive"], optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+serde_json = { version = "1", optional = true }
+
+# eBPF userspace runtime — Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { version = "0.12", features = ["async_tokio"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:tracing-subscriber", "dep:serde_json"]
