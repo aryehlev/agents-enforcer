@@ -11,9 +11,10 @@
 
 use agent_gateway_enforcer_core::backend::{
     BackendCapabilities, BackendHealth, BackendType, EnforcementBackend, EventHandler,
-    FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector, Platform, Result,
-    UnifiedConfig,
+    FileAccessConfig, GatewayConfig, HealthStatus, MetricsCollector, Platform, PodIdentity,
+    PolicyBundle, PolicyHash, Result, UnifiedConfig,
 };
+use std::collections::{HashMap, HashSet};
 use agent_gateway_enforcer_core::events::{
     EventSource, FileAccessType, FileAction, NetworkAction, NetworkProtocol, UnifiedEvent,
 };
@@ -25,19 +26,51 @@ use tokio::sync::mpsc;
 // Linux-specific imports for eBPF
 #[cfg(target_os = "linux")]
 use aya::{
-    include_bytes_aligned,
-    maps::{Array, HashMap as BpfHashMap, Map, MapData, RingBuf},
-    programs::{Lsm, Program},
+    maps::{Array, HashMap as BpfHashMap},
+    programs::{CgroupSockAddr, Lsm},
     Bpf, BpfLoader, Btf,
 };
-#[cfg(target_os = "linux")]
-use std::path::Path;
 
 #[cfg(target_os = "linux")]
-use agent_gateway_enforcer_common::{
-    BlockedEvent, FileBlockedEvent, GatewayKey, PathKey, PathRule, FILE_PERM_DELETE,
-    FILE_PERM_EXEC, FILE_PERM_READ, FILE_PERM_WRITE, IPPROTO_TCP, IPPROTO_UDP,
-};
+use agent_gateway_enforcer_common::{GatewayKey, PodGatewayKey};
+
+/// Default cgroup v2 mount point used for attaching cgroup/connect4/6 programs
+/// when no per-pod path is configured. Overridable at runtime via the
+/// `AGE_CGROUP_PATH` environment variable.
+#[cfg(target_os = "linux")]
+const DEFAULT_CGROUP_PATH: &str = "/sys/fs/cgroup";
+
+// Network eBPF map/config slot indices. Keep in sync with
+// `backends/ebpf-linux/ebpf/network.c`.
+#[cfg(target_os = "linux")]
+const NET_CONFIG_ENABLED: u32 = 0;
+#[cfg(target_os = "linux")]
+const NET_CONFIG_DEFAULT_ACTION: u32 = 1;
+#[cfg(target_os = "linux")]
+const NET_CONFIG_NUM_GATEWAYS: u32 = 2;
+
+// LSM eBPF config slot indices — mirror CONFIG_* in ebpf/lsm.c. Not yet
+// written by any public API; exposed as constants so the wire format is
+// documented in one place when Phase B wires `configure_exec_allowlist`.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const LSM_CONFIG_EXEC_ALLOWLIST_ON: u32 = 4;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const LSM_CONFIG_NUM_EXEC_ALLOW: u32 = 5;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const LSM_CONFIG_BLOCK_MUTATIONS: u32 = 6;
+
+// MUST match MAX_EXEC_ALLOW in ebpf/lsm.c. Bound the allowlist small
+// on purpose: it's an allowlist, not a catalog — if it grows past this
+// we want a louder failure mode than silent truncation.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const MAX_EXEC_ALLOW_ENTRIES: usize = 32;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const EXEC_PATH_LEN: usize = 256;
 
 /// Linux eBPF backend implementation
 ///
@@ -62,6 +95,31 @@ pub struct EbpfLinuxBackend {
     event_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Internal metrics storage
     metrics: Arc<EbpfMetrics>,
+    /// Per-pod enforcement registry (see `pod_registry` for details).
+    pod_registry: Arc<Mutex<PodRegistry>>,
+}
+
+/// Tracks which pods are attached to which compiled policy bundle.
+///
+/// Entries in `attached` carry both the bundle hash and the kernel
+/// cgroup id that was resolved at attach time, so `detach_pod` can
+/// remove the right rows from `allowed_pod_gateways` without
+/// re-stat'ing the cgroup dir (which may already be gone by then).
+#[derive(Default)]
+struct PodRegistry {
+    /// Bundles known to the node, keyed by their hash.
+    bundles: HashMap<PolicyHash, PolicyBundle>,
+    /// pod UID -> (hash, cgroup id) currently enforcing it.
+    attached: HashMap<String, AttachedPod>,
+    /// Bundle hashes that have at least one attached pod. Used to
+    /// drop unused bundles on detach without walking `attached`.
+    active_hashes: HashSet<PolicyHash>,
+}
+
+#[derive(Clone, Debug)]
+struct AttachedPod {
+    hash: PolicyHash,
+    cgroup_id: u64,
 }
 
 /// eBPF program state (Linux only)
@@ -205,6 +263,7 @@ impl EbpfLinuxBackend {
             event_sender: Arc::new(Mutex::new(None)),
             event_task: Arc::new(Mutex::new(None)),
             metrics,
+            pod_registry: Arc::new(Mutex::new(PodRegistry::default())),
         }
     }
 
@@ -263,38 +322,49 @@ impl EbpfLinuxBackend {
     async fn load_ebpf_programs(&self) -> Result<()> {
         tracing::info!("Loading eBPF programs");
 
-        // Try to find compiled eBPF bytecode
-        let lsm_path = self.find_ebpf_object("lsm.o")?;
-
-        if !lsm_path.exists() {
-            tracing::warn!(
-                "eBPF object file not found at {:?} - running in stub mode",
-                lsm_path
-            );
-            tracing::warn!("To enable eBPF enforcement, compile the eBPF programs:");
-            tracing::warn!("  cd backends/ebpf-linux/ebpf && make");
-            return Ok(());
-        }
-
-        tracing::info!("Loading LSM eBPF program from {:?}", lsm_path);
-
-        // Load BTF for CO-RE (Compile Once - Run Everywhere)
+        // BTF is shared between LSM (CO-RE) and network programs.
         let btf = Btf::from_sys_fs().ok();
 
-        // Load the eBPF program
-        let mut bpf = BpfLoader::new()
-            .btf(btf.as_ref())
-            .load_file(&lsm_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load eBPF program: {}", e))?;
+        // --- LSM program (file access) ---
+        let lsm_path = self.find_ebpf_object("lsm.o")?;
+        if lsm_path.exists() {
+            tracing::info!("Loading LSM eBPF program from {:?}", lsm_path);
+            let bpf = BpfLoader::new()
+                .btf(btf.as_ref())
+                .load_file(&lsm_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load LSM eBPF program: {}", e))?;
+            let mut state = self
+                .ebpf_state
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+            state.lsm_program = Some(bpf);
+        } else {
+            tracing::warn!(
+                "LSM eBPF object not found at {:?} - file enforcement disabled",
+                lsm_path
+            );
+            tracing::warn!("Compile with: cd backends/ebpf-linux/ebpf && make");
+        }
 
-        tracing::info!("eBPF program loaded successfully");
-
-        // Store the program handle
-        let mut ebpf_state = self
-            .ebpf_state
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
-        ebpf_state.lsm_program = Some(bpf);
+        // --- Network program (cgroup/connect4/6) ---
+        let net_path = self.find_ebpf_object("network.o")?;
+        if net_path.exists() {
+            tracing::info!("Loading network eBPF program from {:?}", net_path);
+            let bpf = BpfLoader::new()
+                .btf(btf.as_ref())
+                .load_file(&net_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load network eBPF program: {}", e))?;
+            let mut state = self
+                .ebpf_state
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+            state.network_program = Some(bpf);
+        } else {
+            tracing::warn!(
+                "Network eBPF object not found at {:?} - egress enforcement disabled",
+                net_path
+            );
+        }
 
         Ok(())
     }
@@ -328,43 +398,77 @@ impl EbpfLinuxBackend {
     /// Attach eBPF programs to appropriate hooks (Linux only)
     #[cfg(target_os = "linux")]
     async fn attach_programs(&self) -> Result<()> {
-        tracing::info!("Attaching eBPF programs to LSM hooks");
-
         let mut ebpf_state = self
             .ebpf_state
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
 
+        // Attach LSM programs (file access).
         if let Some(ref mut bpf) = ebpf_state.lsm_program {
-            // Load BTF for LSM attachment
             let btf = Btf::from_sys_fs()
                 .map_err(|e| anyhow::anyhow!("Failed to load BTF: {}", e))?;
 
-            // Attach the file_open LSM program
             let program: &mut Lsm = bpf
                 .program_mut("file_open_block")
                 .ok_or_else(|| anyhow::anyhow!("LSM program 'file_open_block' not found"))?
                 .try_into()
                 .map_err(|e| anyhow::anyhow!("Program is not an LSM program: {}", e))?;
-
             program
                 .load("file_open", &btf)
                 .map_err(|e| anyhow::anyhow!("Failed to load LSM program: {}", e))?;
-
             program
                 .attach()
                 .map_err(|e| anyhow::anyhow!("Failed to attach LSM program: {}", e))?;
-
             tracing::info!("LSM program attached to file_open hook");
 
-            // Configure the maps with blocked processes
             self.configure_blocked_processes(bpf)?;
-
-            tracing::info!("eBPF programs attached successfully");
         } else {
-            tracing::warn!("No eBPF program loaded - running in stub mode");
+            tracing::warn!("No LSM eBPF program loaded - file enforcement disabled");
         }
 
+        // Attach network programs (cgroup egress). Failure to open the cgroup
+        // directory or attach is non-fatal: lsm-only mode is still useful and
+        // keeps the backend operational in containers that can't access
+        // /sys/fs/cgroup (e.g. CI).
+        if let Some(ref mut bpf) = ebpf_state.network_program {
+            match Self::attach_network_programs(bpf) {
+                Ok(()) => tracing::info!("Network programs attached to root cgroup"),
+                Err(e) => tracing::warn!(
+                    "Failed to attach network eBPF programs: {} - egress enforcement disabled",
+                    e
+                ),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Attach cgroup/connect4 and cgroup/connect6 at the root cgroup v2 mount.
+    ///
+    /// Per-pod attachment is tracked as Phase A work in `docs/k8s-controller-plan.md`;
+    /// root-cgroup attach is a working default for single-tenant nodes today.
+    #[cfg(target_os = "linux")]
+    fn attach_network_programs(bpf: &mut Bpf) -> Result<()> {
+        let cgroup_path = std::env::var("AGE_CGROUP_PATH")
+            .unwrap_or_else(|_| DEFAULT_CGROUP_PATH.to_string());
+        let cgroup = std::fs::File::open(&cgroup_path)
+            .map_err(|e| anyhow::anyhow!("open cgroup {}: {}", cgroup_path, e))?;
+
+        for prog_name in ["connect4_gate", "connect6_gate"] {
+            let program: &mut CgroupSockAddr = bpf
+                .program_mut(prog_name)
+                .ok_or_else(|| anyhow::anyhow!("network program '{}' not found", prog_name))?
+                .try_into()
+                .map_err(|e| {
+                    anyhow::anyhow!("program '{}' is not CgroupSockAddr: {}", prog_name, e)
+                })?;
+            program
+                .load()
+                .map_err(|e| anyhow::anyhow!("load '{}': {}", prog_name, e))?;
+            program
+                .attach(&cgroup)
+                .map_err(|e| anyhow::anyhow!("attach '{}' to {}: {}", prog_name, cgroup_path, e))?;
+        }
         Ok(())
     }
 
@@ -413,15 +517,262 @@ impl EbpfLinuxBackend {
         Ok(())
     }
 
-    /// Update eBPF maps with gateway configuration (Linux only)
+    /// Update eBPF maps with gateway configuration (Linux only).
+    ///
+    /// Rebuilds the `allowed_gateways` map from scratch so removed entries
+    /// stop being honored on the next connect(). Entries whose `address` is
+    /// not a valid IPv4 string are logged and skipped (IPv6 allowlisting is
+    /// tracked separately — see `network.c`).
     #[cfg(target_os = "linux")]
     fn update_gateway_maps(&self, gateways: &[GatewayConfig]) -> Result<()> {
-        tracing::debug!("Updating gateway maps with {} entries", gateways.len());
+        let entries = Self::build_gateway_entries(gateways);
+        tracing::debug!(
+            "Updating gateway maps: {} configured, {} valid IPv4 entries",
+            gateways.len(),
+            entries.len()
+        );
 
-        // TODO: Implement actual map updates
-        // - Clear existing gateway map
-        // - Add new gateway entries
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
 
+        let bpf = match ebpf_state.network_program.as_mut() {
+            Some(b) => b,
+            None => {
+                tracing::debug!("Network program not loaded; deferring gateway map update");
+                return Ok(());
+            }
+        };
+
+        let mut allowed: BpfHashMap<_, GatewayKey, u8> = bpf
+            .map_mut("allowed_gateways")
+            .ok_or_else(|| anyhow::anyhow!("Map 'allowed_gateways' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bind allowed_gateways map: {}", e))?;
+
+        // Drop any stale entries before writing the new set.
+        let existing: Vec<GatewayKey> = allowed.keys().filter_map(|k| k.ok()).collect();
+        for k in existing {
+            let _ = allowed.remove(&k);
+        }
+        for (key, value) in &entries {
+            allowed
+                .insert(key, value, 0)
+                .map_err(|e| anyhow::anyhow!("insert gateway: {}", e))?;
+        }
+
+        let mut net_config: Array<_, u32> = bpf
+            .map_mut("net_config")
+            .ok_or_else(|| anyhow::anyhow!("Map 'net_config' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bind net_config map: {}", e))?;
+        // Enable enforcement and set default-deny whenever any gateway is
+        // configured; otherwise fall back to audit-mode (default_action=0).
+        let enabled = if entries.is_empty() { 0u32 } else { 1u32 };
+        let default_deny = enabled;
+        net_config.set(NET_CONFIG_ENABLED, enabled, 0)?;
+        net_config.set(NET_CONFIG_DEFAULT_ACTION, default_deny, 0)?;
+        net_config.set(NET_CONFIG_NUM_GATEWAYS, entries.len() as u32, 0)?;
+
+        Ok(())
+    }
+
+    /// Encode exec-allowlist paths into the fixed-size layout the eBPF
+    /// program expects (null-padded `[u8; EXEC_PATH_LEN]` plus length).
+    ///
+    /// Paths longer than `EXEC_PATH_LEN - 1` are truncated and logged;
+    /// paths beyond `MAX_EXEC_ALLOW_ENTRIES` are dropped with a warning
+    /// so we fail loudly rather than silently allowlisting a prefix.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn build_exec_allowlist_entries(paths: &[String]) -> Vec<([u8; EXEC_PATH_LEN], u16)> {
+        let mut out = Vec::with_capacity(paths.len().min(MAX_EXEC_ALLOW_ENTRIES));
+        for path in paths.iter().take(MAX_EXEC_ALLOW_ENTRIES) {
+            let bytes = path.as_bytes();
+            let mut buf = [0u8; EXEC_PATH_LEN];
+            let len = bytes.len().min(EXEC_PATH_LEN - 1);
+            if bytes.len() > len {
+                tracing::warn!(
+                    "Exec allowlist path '{}' truncated to {} bytes",
+                    path,
+                    len
+                );
+            }
+            buf[..len].copy_from_slice(&bytes[..len]);
+            out.push((buf, len as u16));
+        }
+        if paths.len() > MAX_EXEC_ALLOW_ENTRIES {
+            tracing::warn!(
+                "Exec allowlist truncated: {} entries provided, {} max supported",
+                paths.len(),
+                MAX_EXEC_ALLOW_ENTRIES
+            );
+        }
+        out
+    }
+
+    /// Turn user-facing `GatewayConfig` into the eBPF-map key/value pairs.
+    ///
+    /// Pulled out as a free function so it's easy to unit-test without a
+    /// live kernel — see `tests::build_gateway_entries_*`.
+    #[cfg(target_os = "linux")]
+    fn build_gateway_entries(gateways: &[GatewayConfig]) -> Vec<(GatewayKey, u8)> {
+        gateways
+            .iter()
+            .filter(|g| g.enabled)
+            .filter_map(|g| match g.address.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => Some((GatewayKey::new(u32::from(ip).to_be(), g.port), 1u8)),
+                Err(_) => {
+                    tracing::warn!(
+                        "Skipping non-IPv4 gateway '{}' (IPv6 support pending)",
+                        g.address
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Variant of `build_gateway_entries` that stamps each entry with a
+    /// cgroup id so it goes into the per-pod map. Used by `attach_pod`.
+    #[cfg(target_os = "linux")]
+    fn build_pod_gateway_entries(
+        cgroup_id: u64,
+        gateways: &[GatewayConfig],
+    ) -> Vec<(PodGatewayKey, u8)> {
+        gateways
+            .iter()
+            .filter(|g| g.enabled)
+            .filter_map(|g| match g.address.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => Some((
+                    PodGatewayKey::new(cgroup_id, u32::from(ip).to_be(), g.port),
+                    1u8,
+                )),
+                Err(_) => {
+                    tracing::warn!(
+                        "Skipping non-IPv4 gateway '{}' for cgroup {}",
+                        g.address,
+                        cgroup_id
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Resolve a cgroup v2 directory to its kernel id (matches the value
+    /// `bpf_get_current_cgroup_id()` returns inside the hook).
+    ///
+    /// On Linux this is simply `stat(path).st_ino`; the kernel reuses the
+    /// kernfs inode number as the cgroup id.
+    #[cfg(target_os = "linux")]
+    fn cgroup_id_for_path(path: &std::path::Path) -> Result<u64> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path)
+            .map_err(|e| anyhow::anyhow!("stat cgroup {}: {}", path.display(), e))?;
+        if !meta.is_dir() {
+            return Err(anyhow::anyhow!(
+                "cgroup path {} is not a directory",
+                path.display()
+            ));
+        }
+        Ok(meta.ino())
+    }
+
+    /// Write `allowed_pod_gateways` entries for a single cgroup.
+    ///
+    /// Replaces (not merges with) any prior entries for this cgroup, so
+    /// reassigning a pod to a different bundle drops the old rules
+    /// atomically from the hook's perspective.
+    #[cfg(target_os = "linux")]
+    fn program_pod_gateways(&self, cgroup_id: u64, gateways: &[GatewayConfig]) -> Result<()> {
+        let entries = Self::build_pod_gateway_entries(cgroup_id, gateways);
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+
+        let bpf = match ebpf_state.network_program.as_mut() {
+            Some(b) => b,
+            None => {
+                tracing::debug!(
+                    "Network program not loaded; pod cgroup {} rules staged in registry only",
+                    cgroup_id
+                );
+                return Ok(());
+            }
+        };
+
+        let mut m: BpfHashMap<_, PodGatewayKey, u8> = bpf
+            .map_mut("allowed_pod_gateways")
+            .ok_or_else(|| anyhow::anyhow!("Map 'allowed_pod_gateways' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bind allowed_pod_gateways map: {}", e))?;
+
+        // Remove stale entries for this cgroup before writing the new set.
+        let stale: Vec<PodGatewayKey> = m
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.cgroup_id == cgroup_id)
+            .collect();
+        for k in stale {
+            let _ = m.remove(&k);
+        }
+
+        for (key, value) in &entries {
+            m.insert(key, value, 0)
+                .map_err(|e| anyhow::anyhow!("insert pod gateway: {}", e))?;
+        }
+
+        // Per-pod rules only take effect if the program is enabled and in
+        // default-deny mode; flip both on if we wrote any entries and the
+        // user hasn't already done so via configure_gateways.
+        if !entries.is_empty() {
+            let mut net_config: Array<_, u32> = bpf
+                .map_mut("net_config")
+                .ok_or_else(|| anyhow::anyhow!("Map 'net_config' not found"))?
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("bind net_config map: {}", e))?;
+            net_config.set(NET_CONFIG_ENABLED, 1u32, 0)?;
+            net_config.set(NET_CONFIG_DEFAULT_ACTION, 1u32, 0)?;
+        }
+
+        tracing::debug!(
+            "Programmed {} gateway entries for cgroup_id={}",
+            entries.len(),
+            cgroup_id
+        );
+        Ok(())
+    }
+
+    /// Drop every `allowed_pod_gateways` entry belonging to `cgroup_id`.
+    /// Called on `detach_pod` and tolerant of the map being absent (stub mode).
+    #[cfg(target_os = "linux")]
+    fn clear_pod_gateways(&self, cgroup_id: u64) -> Result<()> {
+        let mut ebpf_state = self
+            .ebpf_state
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+        let Some(bpf) = ebpf_state.network_program.as_mut() else {
+            return Ok(());
+        };
+        let mut m: BpfHashMap<_, PodGatewayKey, u8> = bpf
+            .map_mut("allowed_pod_gateways")
+            .ok_or_else(|| anyhow::anyhow!("Map 'allowed_pod_gateways' not found"))?
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bind allowed_pod_gateways map: {}", e))?;
+
+        let stale: Vec<PodGatewayKey> = m
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.cgroup_id == cgroup_id)
+            .collect();
+        let n = stale.len();
+        for k in stale {
+            let _ = m.remove(&k);
+        }
+        tracing::debug!("Cleared {} pod gateway entries for cgroup_id={}", n, cgroup_id);
         Ok(())
     }
 
@@ -573,7 +924,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
         }
     }
 
-    fn initialize(&mut self, config: &UnifiedConfig) -> Result<()> {
+    async fn initialize(&mut self, config: &UnifiedConfig) -> Result<()> {
         tracing::info!("Initializing Linux eBPF backend");
 
         // Validate we're on Linux for actual eBPF functionality
@@ -635,7 +986,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
         Ok(())
     }
 
-    fn start(&mut self) -> Result<()> {
+    async fn start(&mut self) -> Result<()> {
         tracing::info!("Starting Linux eBPF backend");
 
         let current_state = self.get_state()?;
@@ -646,25 +997,16 @@ impl EnforcementBackend for EbpfLinuxBackend {
             ));
         }
 
-        // Load and attach eBPF programs (Linux only)
+        // Load and attach eBPF programs (Linux only). We always transition
+        // to Running even if eBPF loading fails — the backend then operates
+        // in stub mode (no enforcement), which lets tests exercise the
+        // lifecycle on hosts without eBPF support.
         #[cfg(target_os = "linux")]
         {
-            // Use tokio runtime to run async functions
-            let rt = tokio::runtime::Handle::try_current();
-            if let Ok(handle) = rt {
-                // We're in an async context, spawn blocking
-                let self_ref = self as *mut Self;
-                handle.block_on(async {
-                    // SAFETY: We're in the same thread and borrowing for a limited scope
-                    let backend = unsafe { &*self_ref };
-                    if let Err(e) = backend.load_ebpf_programs().await {
-                        tracing::warn!("Failed to load eBPF programs: {} - running in stub mode", e);
-                    } else if let Err(e) = backend.attach_programs().await {
-                        tracing::warn!("Failed to attach eBPF programs: {} - running in stub mode", e);
-                    }
-                });
-            } else {
-                tracing::warn!("No tokio runtime available - running in stub mode");
+            if let Err(e) = self.load_ebpf_programs().await {
+                tracing::warn!("Failed to load eBPF programs: {} - running in stub mode", e);
+            } else if let Err(e) = self.attach_programs().await {
+                tracing::warn!("Failed to attach eBPF programs: {} - running in stub mode", e);
             }
         }
 
@@ -674,7 +1016,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    async fn stop(&mut self) -> Result<()> {
         tracing::info!("Stopping Linux eBPF backend");
 
         // Detach eBPF programs (Linux only)
@@ -702,7 +1044,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
         Ok(())
     }
 
-    fn configure_gateways(&self, gateways: &[GatewayConfig]) -> Result<()> {
+    async fn configure_gateways(&self, gateways: &[GatewayConfig]) -> Result<()> {
         tracing::info!("Configuring {} gateways", gateways.len());
 
         // Update configuration
@@ -728,7 +1070,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
         Ok(())
     }
 
-    fn configure_file_access(&self, config: &FileAccessConfig) -> Result<()> {
+    async fn configure_file_access(&self, config: &FileAccessConfig) -> Result<()> {
         tracing::info!(
             "Configuring file access - {} allowed, {} denied paths",
             config.allowed_paths.len(),
@@ -766,7 +1108,7 @@ impl EnforcementBackend for EbpfLinuxBackend {
         self.event_handler.clone()
     }
 
-    fn health_check(&self) -> Result<BackendHealth> {
+    async fn health_check(&self) -> Result<BackendHealth> {
         let state = self.get_state()?;
 
         let (status, details) = match state {
@@ -825,13 +1167,13 @@ impl EnforcementBackend for EbpfLinuxBackend {
         })
     }
 
-    fn cleanup(&mut self) -> Result<()> {
+    async fn cleanup(&mut self) -> Result<()> {
         tracing::info!("Cleaning up Linux eBPF backend resources");
 
         // Stop if running
         let current_state = self.get_state()?;
         if current_state == BackendState::Running {
-            self.stop()?;
+            self.stop().await?;
         }
 
         // Clean up eBPF programs (Linux only)
@@ -867,6 +1209,122 @@ impl EnforcementBackend for EbpfLinuxBackend {
         self.set_state(BackendState::NotInitialized)?;
         tracing::info!("Linux eBPF backend cleanup completed");
 
+        Ok(())
+    }
+
+    async fn update_policy(&self, bundle: &PolicyBundle) -> Result<()> {
+        let mut reg = self
+            .pod_registry
+            .lock()
+            .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+        tracing::info!(
+            "Staging policy bundle {} ({} gateways, {} exec rules)",
+            bundle.hash.as_str(),
+            bundle.gateways.len(),
+            bundle.exec_allowlist.len()
+        );
+        reg.bundles.insert(bundle.hash.clone(), bundle.clone());
+        Ok(())
+    }
+
+    async fn attach_pod(&self, pod: &PodIdentity, policy_hash: &PolicyHash) -> Result<()> {
+        // Fetch the staged bundle + check idempotency under the registry lock.
+        let bundle = {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+
+            let bundle = reg
+                .bundles
+                .get(policy_hash)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "attach_pod: bundle {} not staged; call update_policy first",
+                        policy_hash.as_str()
+                    )
+                })?
+                .clone();
+
+            if let Some(existing) = reg.attached.get(&pod.uid) {
+                if &existing.hash == policy_hash {
+                    return Ok(());
+                }
+                tracing::info!(
+                    "Pod {} reassigned from bundle {} to {}",
+                    pod.uid,
+                    existing.hash.as_str(),
+                    policy_hash.as_str()
+                );
+            }
+            bundle
+        };
+
+        // Resolve the cgroup id now — the path must exist for enforcement
+        // to work. Non-Linux builds skip this entirely.
+        #[cfg(target_os = "linux")]
+        let cgroup_id =
+            Self::cgroup_id_for_path(std::path::Path::new(&pod.cgroup_path))?;
+        #[cfg(not(target_os = "linux"))]
+        let cgroup_id: u64 = 0;
+
+        #[cfg(target_os = "linux")]
+        self.program_pod_gateways(cgroup_id, &bundle.gateways)?;
+
+        // Record the binding only after the map write succeeded; a failed
+        // attach leaves no state to roll back.
+        {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+            reg.attached.insert(
+                pod.uid.clone(),
+                AttachedPod {
+                    hash: policy_hash.clone(),
+                    cgroup_id,
+                },
+            );
+            reg.active_hashes.insert(policy_hash.clone());
+        }
+
+        tracing::info!(
+            "Pod {}/{} ({}) attached to bundle {} (cgroup_id={})",
+            pod.namespace,
+            pod.name,
+            pod.uid,
+            policy_hash.as_str(),
+            cgroup_id
+        );
+        Ok(())
+    }
+
+    async fn detach_pod(&self, pod: &PodIdentity) -> Result<()> {
+        let attached = {
+            let mut reg = self
+                .pod_registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("pod_registry lock: {}", e))?;
+            let Some(a) = reg.attached.remove(&pod.uid) else {
+                tracing::debug!("detach_pod: {} not attached (already gone?)", pod.uid);
+                return Ok(());
+            };
+            let still_referenced = reg.attached.values().any(|v| v.hash == a.hash);
+            if !still_referenced {
+                reg.active_hashes.remove(&a.hash);
+            }
+            a
+        };
+
+        #[cfg(target_os = "linux")]
+        self.clear_pod_gateways(attached.cgroup_id)?;
+
+        tracing::info!(
+            "Pod {}/{} detached (cgroup_id={})",
+            pod.namespace,
+            pod.name,
+            attached.cgroup_id
+        );
         Ok(())
     }
 }
@@ -949,8 +1407,8 @@ mod tests {
         assert!(called.load(std::sync::atomic::Ordering::Relaxed));
     }
 
-    #[test]
-    fn test_backend_lifecycle() {
+    #[tokio::test]
+    async fn test_backend_lifecycle() {
         let mut backend = EbpfLinuxBackend::new();
 
         // Initial state
@@ -958,34 +1416,35 @@ mod tests {
 
         // Initialize
         let config = UnifiedConfig::default();
-        backend.initialize(&config).expect("Should initialize");
+        backend.initialize(&config).await.expect("Should initialize");
         assert_eq!(backend.get_state().unwrap(), BackendState::Initialized);
 
         // Start
-        backend.start().expect("Should start");
+        backend.start().await.expect("Should start");
         assert_eq!(backend.get_state().unwrap(), BackendState::Running);
 
         // Health check
-        let health = backend.health_check().expect("Should check health");
+        let health = backend.health_check().await.expect("Should check health");
         assert!(matches!(
             health.status,
             HealthStatus::Healthy | HealthStatus::Degraded
         ));
 
         // Stop
-        backend.stop().expect("Should stop");
+        backend.stop().await.expect("Should stop");
         assert_eq!(backend.get_state().unwrap(), BackendState::Stopped);
 
         // Cleanup
-        backend.cleanup().expect("Should cleanup");
+        backend.cleanup().await.expect("Should cleanup");
         assert_eq!(backend.get_state().unwrap(), BackendState::NotInitialized);
     }
 
-    #[test]
-    fn test_gateway_configuration() {
+    #[tokio::test]
+    async fn test_gateway_configuration() {
         let mut backend = EbpfLinuxBackend::new();
         backend
             .initialize(&UnifiedConfig::default())
+            .await
             .expect("Should initialize");
 
         let gateways = vec![
@@ -1005,6 +1464,7 @@ mod tests {
 
         backend
             .configure_gateways(&gateways)
+            .await
             .expect("Should configure gateways");
 
         // Verify configuration was stored
@@ -1014,11 +1474,12 @@ mod tests {
         assert_eq!(config.gateways[1].port, 8080);
     }
 
-    #[test]
-    fn test_file_access_configuration() {
+    #[tokio::test]
+    async fn test_file_access_configuration() {
         let mut backend = EbpfLinuxBackend::new();
         backend
             .initialize(&UnifiedConfig::default())
+            .await
             .expect("Should initialize");
 
         let file_config = FileAccessConfig {
@@ -1029,6 +1490,7 @@ mod tests {
 
         backend
             .configure_file_access(&file_config)
+            .await
             .expect("Should configure file access");
 
         // Verify configuration was stored
@@ -1082,5 +1544,226 @@ mod tests {
         assert_eq!(data["network"]["allowed_total"], 1);
         assert_eq!(data["file"]["blocked_total"], 1);
         assert_eq!(data["file"]["allowed_total"], 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_gateway_entries_filters_and_encodes_ipv4() {
+        let gateways = vec![
+            GatewayConfig {
+                address: "10.0.0.1".to_string(),
+                port: 443,
+                enabled: true,
+                description: None,
+            },
+            GatewayConfig {
+                address: "192.168.1.5".to_string(),
+                port: 8080,
+                enabled: false, // disabled -> dropped
+                description: None,
+            },
+            GatewayConfig {
+                address: "::1".to_string(),
+                port: 443,
+                enabled: true, // IPv6 -> dropped (not yet supported)
+                description: None,
+            },
+            GatewayConfig {
+                address: "not-an-ip".to_string(),
+                port: 443,
+                enabled: true, // parse failure -> dropped
+                description: None,
+            },
+        ];
+
+        let entries = EbpfLinuxBackend::build_gateway_entries(&gateways);
+        assert_eq!(entries.len(), 1, "only the enabled IPv4 entry survives");
+
+        let (key, value) = &entries[0];
+        assert_eq!(*value, 1u8);
+        assert_eq!(key.port, 443);
+        // 10.0.0.1 stored in network byte order (big-endian).
+        let expected_addr = u32::from(std::net::Ipv4Addr::new(10, 0, 0, 1)).to_be();
+        assert_eq!(key.addr, expected_addr);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_gateway_entries_empty_for_no_input() {
+        let entries = EbpfLinuxBackend::build_gateway_entries(&[]);
+        assert!(entries.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_exec_allowlist_encodes_paths() {
+        let paths = vec![
+            "/usr/bin/python3".to_string(),
+            "/usr/local/bin/agent".to_string(),
+        ];
+        let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&paths);
+        assert_eq!(entries.len(), 2);
+
+        let (buf, len) = &entries[0];
+        assert_eq!(*len as usize, "/usr/bin/python3".len());
+        assert_eq!(&buf[..*len as usize], b"/usr/bin/python3");
+        assert_eq!(buf[*len as usize], 0, "padding past len must be zeroed");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_exec_allowlist_truncates_long_paths() {
+        let long = "/".to_string() + &"a".repeat(EXEC_PATH_LEN + 64);
+        let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&[long]);
+        let (_, len) = &entries[0];
+        assert_eq!(*len as usize, EXEC_PATH_LEN - 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_exec_allowlist_caps_at_max_entries() {
+        let many: Vec<String> = (0..MAX_EXEC_ALLOW_ENTRIES + 5)
+            .map(|i| format!("/bin/bin{}", i))
+            .collect();
+        let entries = EbpfLinuxBackend::build_exec_allowlist_entries(&many);
+        assert_eq!(entries.len(), MAX_EXEC_ALLOW_ENTRIES);
+    }
+
+    /// Build a pod whose cgroup_path is a real tempdir so that the
+    /// attach_pod codepath (which calls `stat()` to learn the cgroup id)
+    /// succeeds without root or mounted cgroup v2 access.
+    fn sample_pod(uid: &str) -> (PodIdentity, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let pod = PodIdentity {
+            uid: uid.into(),
+            namespace: "prod".into(),
+            name: format!("agent-{}", uid),
+            cgroup_path: dir.path().to_string_lossy().into_owned(),
+            node_name: "test-node".into(),
+        };
+        (pod, dir)
+    }
+
+    fn sample_bundle(hash: &str) -> PolicyBundle {
+        PolicyBundle {
+            hash: PolicyHash::new(hash),
+            gateways: vec![GatewayConfig {
+                address: "10.0.0.1".into(),
+                port: 443,
+                enabled: true,
+                description: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_pod_requires_staged_bundle() {
+        let backend = EbpfLinuxBackend::new();
+        let (pod, _tmp) = sample_pod("p1");
+        let err = backend
+            .attach_pod(&pod, &PolicyHash::new("missing"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not staged"));
+    }
+
+    #[tokio::test]
+    async fn attach_pod_records_binding_and_refcounts_on_detach() {
+        let mut backend = EbpfLinuxBackend::new();
+        backend
+            .initialize(&UnifiedConfig::default())
+            .await
+            .unwrap();
+
+        let bundle = sample_bundle("h1");
+        backend.update_policy(&bundle).await.unwrap();
+
+        let (pod1, _tmp1) = sample_pod("p1");
+        let (pod2, _tmp2) = sample_pod("p2");
+        backend.attach_pod(&pod1, &bundle.hash).await.unwrap();
+        backend.attach_pod(&pod2, &bundle.hash).await.unwrap();
+
+        {
+            let reg = backend.pod_registry.lock().unwrap();
+            assert_eq!(reg.attached.len(), 2);
+            assert_eq!(reg.active_hashes.len(), 1);
+            // Every attached entry carries a non-zero cgroup id resolved
+            // via stat() — confirms the codepath ran against the tempdir.
+            for a in reg.attached.values() {
+                assert_ne!(a.cgroup_id, 0, "cgroup_id must be populated");
+            }
+        }
+
+        backend.detach_pod(&pod1).await.unwrap();
+        {
+            let reg = backend.pod_registry.lock().unwrap();
+            assert_eq!(reg.attached.len(), 1);
+            assert!(reg.active_hashes.contains(&bundle.hash));
+        }
+
+        backend.detach_pod(&pod2).await.unwrap();
+        {
+            let reg = backend.pod_registry.lock().unwrap();
+            assert!(reg.attached.is_empty());
+            assert!(reg.active_hashes.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_pod_is_idempotent() {
+        let mut backend = EbpfLinuxBackend::new();
+        backend
+            .initialize(&UnifiedConfig::default())
+            .await
+            .unwrap();
+        let bundle = sample_bundle("h2");
+        backend.update_policy(&bundle).await.unwrap();
+        let (pod, _tmp) = sample_pod("p1");
+        backend.attach_pod(&pod, &bundle.hash).await.unwrap();
+        backend.attach_pod(&pod, &bundle.hash).await.unwrap();
+
+        let reg = backend.pod_registry.lock().unwrap();
+        assert_eq!(reg.attached.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn detach_unknown_pod_is_ok() {
+        let backend = EbpfLinuxBackend::new();
+        let (pod, _tmp) = sample_pod("ghost");
+        backend.detach_pod(&pod).await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_id_for_path_returns_inode_of_tempdir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let id = EbpfLinuxBackend::cgroup_id_for_path(dir.path()).unwrap();
+        assert_ne!(id, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_id_for_path_rejects_nonexistent() {
+        let err = EbpfLinuxBackend::cgroup_id_for_path(
+            std::path::Path::new("/nope/does/not/exist"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("stat cgroup"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_pod_gateway_entries_stamps_cgroup_id() {
+        let gws = vec![GatewayConfig {
+            address: "10.0.0.1".into(),
+            port: 443,
+            enabled: true,
+            description: None,
+        }];
+        let entries = EbpfLinuxBackend::build_pod_gateway_entries(42, &gws);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0.cgroup_id, 42);
+        assert_eq!(entries[0].0.port, 443);
     }
 }

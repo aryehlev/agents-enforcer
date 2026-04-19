@@ -1,0 +1,188 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentpolicies.agents.enforcer.io
+spec:
+  group: agents.enforcer.io
+  names:
+    categories: []
+    kind: AgentPolicy
+    plural: agentpolicies
+    shortNames:
+    - agentpol
+    singular: agentpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.podSelector.matchLabels
+      name: Selector
+      type: string
+    - jsonPath: .status.enforcedPods
+      name: Enforced
+      type: integer
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for AgentPolicySpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Top-level CR: selects a set of pods in a namespace and declares which egress destinations, file paths, and exec binaries they're allowed to use.
+
+              See §3.1 of `docs/k8s-controller-plan.md` for the YAML shape.
+            properties:
+              blockMutations:
+                default: false
+                description: Block path mutations (unlink/mkdir/rmdir) from matched pods. Defaults to false so audit-mode rollouts don't accidentally brick sidecar log rotation.
+                type: boolean
+              egress:
+                description: Egress rules. Omitted = audit-only egress (connections observed but not blocked); required when the controller enforces default-deny cluster-wide via `EnforcerConfig`.
+                nullable: true
+                properties:
+                  cidrs:
+                    description: Inline (CIDR, port) allow entries for destinations that don't fit the catalog (e.g. a cluster-internal database).
+                    items:
+                      description: Inline (CIDR, port) egress entry.
+                      properties:
+                        cidr:
+                          description: IPv4/IPv6 CIDR; today only exact-IP /32 and /128 are honored by the ebpf-linux backend. Broader prefixes compile but only the host-bit portion is enforced until LPM maps land.
+                          type: string
+                        ports:
+                          description: Ports to allow to this CIDR. Empty = any port.
+                          items:
+                            format: uint16
+                            minimum: 0.0
+                            type: integer
+                          type: array
+                      required:
+                      - cidr
+                      type: object
+                    type: array
+                  defaultAction:
+                    default: Audit
+                    description: What to do with destinations not explicitly allowed.
+                    enum:
+                    - Deny
+                    - Audit
+                    - Allow
+                    type: string
+                  gatewayRefs:
+                    description: Named gateways resolved via `GatewayCatalog`. Reference-only; the catalog defines the actual (host, port) pairs.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              exec:
+                description: Exec rules.
+                nullable: true
+                properties:
+                  allowedBinaries:
+                    description: Binary paths (prefix match) the pod may exec. All other execs are denied at `bprm_check_security`.
+                    items:
+                      type: string
+                    type: array
+                required:
+                - allowedBinaries
+                type: object
+              fileAccess:
+                description: File access rules.
+                nullable: true
+                properties:
+                  allowedPaths:
+                    description: Path prefixes the pod is allowed to read/write.
+                    items:
+                      type: string
+                    type: array
+                  defaultDeny:
+                    default: false
+                    description: Whether file operations from matched pods are default-denied.
+                    type: boolean
+                  deniedPaths:
+                    description: Path prefixes the pod must not touch.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              podSelector:
+                description: Selects pods this policy applies to.
+                properties:
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                type: object
+              schedule:
+                description: Optional schedule. When set, enforcement toggles between the policy's normal rules and the `inactiveAction` default based on wall-clock time. Every reconcile picks the current state and requeues at the next transition, so operators don't need a separate cron controller.
+                nullable: true
+                properties:
+                  activeWindows:
+                    description: One or more active windows (days + HH:MM..HH:MM). At least one required — an empty list is equivalent to "never active", which is an expensive way to spell "delete the policy".
+                    items:
+                      description: A single active window. Days is a list of weekday names (Mon, Tue, …, Sun); `start` / `end` are HH:MM strings. `end` may be earlier than `start` to represent a window that crosses midnight.
+                      properties:
+                        days:
+                          items:
+                            description: English weekday names so CR YAML is readable. No shortening — this isn't a cronline.
+                            enum:
+                            - Mon
+                            - Tue
+                            - Wed
+                            - Thu
+                            - Fri
+                            - Sat
+                            - Sun
+                            type: string
+                          type: array
+                        end:
+                          description: HH:MM, UTC.
+                          type: string
+                        start:
+                          description: HH:MM, UTC.
+                          type: string
+                      required:
+                      - days
+                      - end
+                      - start
+                      type: object
+                    type: array
+                  inactiveAction:
+                    default: Allow
+                    description: What egress defaults to when *outside* every active window. Defaults to Allow so a misconfigured schedule fails open rather than black-holing production traffic.
+                    enum:
+                    - Deny
+                    - Audit
+                    - Allow
+                    type: string
+                required:
+                - activeWindows
+                type: object
+            required:
+            - podSelector
+            type: object
+          status:
+            description: Runtime status written back by the controller.
+            nullable: true
+            properties:
+              enforcedPods:
+                default: 0
+                description: Count of pods currently enforcing this policy across the cluster.
+                format: uint32
+                minimum: 0.0
+                type: integer
+              lastBundleHash:
+                description: Last compiled bundle hash, so operators can cross-reference against node-agent metrics.
+                nullable: true
+                type: string
+              message:
+                description: Human-readable message for `kubectl describe` when something went wrong (e.g. an unresolved gateway reference).
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: AgentPolicy
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

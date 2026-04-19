@@ -360,16 +360,12 @@ impl MetricsCollector {
         // This would typically query backend status from the backend registry
         // For now, we'll set placeholder values
 
-        // Example: Update backend status for known backends
+        // Only one backend these days; expose it even when idle so
+        // dashboards don't blink on first-sample creation.
         metrics
             .backends
             .backend_status
             .with_label_values(&["ebpf-linux", "ebpf"])
-            .set(0);
-        metrics
-            .backends
-            .backend_status
-            .with_label_values(&["macos-desktop", "desktop"])
             .set(0);
 
         Ok(())
@@ -401,20 +397,7 @@ impl MetricsCollector {
             Ok(uptime.tv_sec as f64 + uptime.tv_nsec as f64 / 1_000_000_000.0)
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            let mut uptime = std::mem::MaybeUninit::<libc::timespec>::uninit();
-            let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, uptime.as_mut_ptr()) };
-
-            if result != 0 {
-                return Err(anyhow::anyhow!("Failed to get system uptime"));
-            }
-
-            let uptime = unsafe { uptime.assume_init() };
-            Ok(uptime.tv_sec as f64 + uptime.tv_nsec as f64 / 1_000_000_000.0)
-        }
-
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(target_os = "linux"))]
         {
             Err(anyhow::anyhow!("Uptime not supported on this platform"))
         }

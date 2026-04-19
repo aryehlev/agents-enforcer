@@ -1,0 +1,30 @@
+[package]
+name = "agent-gateway-enforcer-ctl"
+version = "0.1.0"
+edition = "2021"
+authors = ["Agent Gateway Enforcer Team"]
+description = "enforcerctl — operator CLI for agents.enforcer.io"
+license = "MIT"
+
+[dependencies]
+agent-gateway-enforcer-controller = { path = "../agent-gateway-enforcer-controller" }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+kube = { workspace = true }
+k8s-openapi = { workspace = true }
+# Thin, columnar table rendering matched to kubectl's style.
+comfy-table = "7"
+# Reusable Prometheus query client for the `budget` + `status` subs.
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"] }
+
+[[bin]]
+name = "enforcerctl"
+path = "src/main.rs"

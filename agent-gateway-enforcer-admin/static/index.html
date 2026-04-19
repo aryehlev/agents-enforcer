@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agents-enforcer</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>agents-enforcer</h1>
+    <nav>
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="policies">Policies</button>
+      <button data-tab="capabilities">Capabilities</button>
+      <button data-tab="violations">Violations</button>
+    </nav>
+    <div id="nsFilter">
+      <label>namespace
+        <input id="nsInput" type="text" placeholder="all" autocomplete="off">
+      </label>
+      <button id="refreshBtn" title="Refresh (or wait 30s auto-refresh)">↻</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-overview" class="tab active">
+      <div class="cards">
+        <div class="card"><div class="label">Nodes up</div><div id="ov-nodes" class="value">–</div></div>
+        <div class="card"><div class="label">Policies</div><div id="ov-policies" class="value">–</div></div>
+        <div class="card"><div class="label">Capabilities</div><div id="ov-caps" class="value">–</div></div>
+        <div class="card"><div class="label">Violations (last 1h)</div><div id="ov-viol" class="value">–</div></div>
+        <div class="card"><div class="label">Spend today (USD)</div><div id="ov-spend" class="value">–</div></div>
+      </div>
+      <p class="hint">Data from the apiserver + optional Prometheus (<code>--prom-url</code>). Writes still go through <code>kubectl apply</code> so every change hits the admission webhook — this is a read-only view.</p>
+    </section>
+
+    <section id="tab-policies" class="tab">
+      <table id="policies-table"><thead><tr>
+        <th>Namespace</th><th>Name</th><th>Selector</th><th>Default</th><th>Schedule</th><th>Enforced</th><th>Hash</th><th>Message</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="tab-capabilities" class="tab">
+      <table id="caps-table"><thead><tr>
+        <th>Namespace</th><th>Name</th><th>Models</th><th>Tools</th><th>Budget $</th><th>Spent $</th><th>Util %</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="tab-violations" class="tab">
+      <div>
+        <label>Since
+          <select id="sinceInput">
+            <option value="">all</option>
+            <option value="1h" selected>1h</option>
+            <option value="6h">6h</option>
+            <option value="1d">1d</option>
+          </select>
+        </label>
+      </div>
+      <table id="viol-table"><thead><tr>
+        <th>Namespace</th><th>Pod</th><th>Policy</th><th>Kind</th><th>Detail</th><th>Count</th><th>Last seen</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+  </main>
+
+  <footer>
+    <span id="status"></span>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>

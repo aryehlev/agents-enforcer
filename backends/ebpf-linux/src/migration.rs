@@ -83,17 +83,15 @@ impl ConfigMigrator {
         Ok(gateways)
     }
 
-    /// Parse gateway string in "IP:PORT" format
+    /// Parse gateway string in "IP:PORT" or "[IPv6]:PORT" format.
     fn parse_gateway_string(&self, gateway_str: &str) -> Option<GatewayAddr> {
-        let parts: Vec<&str> = gateway_str.split(':').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-
-        let ip: std::net::IpAddr = parts[0].trim().parse().ok()?;
-        let port: u16 = parts[1].trim().parse().ok()?;
-
-        Some(GatewayAddr { ip, port })
+        // SocketAddr parses both `1.2.3.4:80` and `[::1]:80` correctly and
+        // rejects bare IPs without a port.
+        let addr: std::net::SocketAddr = gateway_str.trim().parse().ok()?;
+        Some(GatewayAddr {
+            ip: addr.ip(),
+            port: addr.port(),
+        })
     }
 
     /// Migrate file enforcement configuration

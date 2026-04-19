@@ -23,6 +23,47 @@ impl GatewayKey {
     }
 }
 
+/// Key for the per-pod allowed gateways map.
+///
+/// Combines a cgroup v2 id (returned by `bpf_get_current_cgroup_id()` in
+/// the kernel and by `stat(cgroup_path).st_ino` in userspace) with the
+/// destination (addr, port). This gives us per-pod allowlisting without
+/// paying the cost of a `BPF_MAP_TYPE_HASH_OF_MAPS` scheme — an inner
+/// map per pod — which aya 0.12 doesn't expose well for runtime-created
+/// inner maps. Switching to HASH_OF_MAPS later is a drop-in
+/// replacement: the (cgroup_id, addr, port) triple is equivalent to
+/// (cgroup_id) -> (addr, port) map-in-map.
+///
+/// A cgroup_id of 0 means "global" — used by `configure_gateways` to
+/// keep backwards-compatible behavior for single-tenant deployments.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PodGatewayKey {
+    /// Kernel cgroup id (u64). 0 = global entry.
+    pub cgroup_id: u64,
+    /// IPv4 address in network byte order (big endian).
+    pub addr: u32,
+    /// Port in host byte order; 0 matches any port for this (cgroup,addr).
+    pub port: u16,
+    /// Padding for alignment.
+    pub _pad: u16,
+}
+
+impl PodGatewayKey {
+    pub const fn new(cgroup_id: u64, addr: u32, port: u16) -> Self {
+        Self {
+            cgroup_id,
+            addr,
+            port,
+            _pad: 0,
+        }
+    }
+
+    pub const fn global(addr: u32, port: u16) -> Self {
+        Self::new(0, addr, port)
+    }
+}
+
 /// Key for tracking blocked connection metrics.
 /// Used to count how many times a specific destination was blocked.
 #[repr(C)]
@@ -203,6 +244,9 @@ pub struct FileBlockedEvent {
 unsafe impl aya::Pod for GatewayKey {}
 
 #[cfg(target_os = "linux")]
+unsafe impl aya::Pod for PodGatewayKey {}
+
+#[cfg(target_os = "linux")]
 unsafe impl aya::Pod for BlockedKey {}
 
 #[cfg(target_os = "linux")]
@@ -265,6 +309,32 @@ mod tests {
     fn test_gateway_key_size() {
         // Ensure struct is properly aligned for eBPF maps
         assert_eq!(core::mem::size_of::<GatewayKey>(), 8);
+    }
+
+    #[test]
+    fn pod_gateway_key_layout_is_16_bytes() {
+        // 8 (cgroup_id) + 4 (addr) + 2 (port) + 2 (pad). Size must match
+        // the BPF map key size we declare in ebpf/network.c.
+        assert_eq!(core::mem::size_of::<PodGatewayKey>(), 16);
+    }
+
+    #[test]
+    fn pod_gateway_key_global_uses_zero_cgroup() {
+        let k = PodGatewayKey::global(0x0A00_0001, 443);
+        assert_eq!(k.cgroup_id, 0);
+        assert_eq!(k.addr, 0x0A00_0001);
+        assert_eq!(k.port, 443);
+    }
+
+    #[test]
+    fn pod_gateway_key_hash_distinguishes_cgroups() {
+        use std::collections::HashMap;
+        let a = PodGatewayKey::new(42, 0x0100_0001, 443);
+        let b = PodGatewayKey::new(43, 0x0100_0001, 443);
+        let mut m = HashMap::new();
+        m.insert(a, 1u8);
+        m.insert(b, 2u8);
+        assert_eq!(m.len(), 2, "different cgroup ids must hash distinctly");
     }
 
     // -------------------------------------------------------------------------

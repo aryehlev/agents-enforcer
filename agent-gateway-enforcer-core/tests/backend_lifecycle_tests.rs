@@ -71,8 +71,6 @@ async fn test_lifecycle_manager_start_backend() {
     // Register a mock factory for the current platform
     let backend_type = match current_platform {
         Platform::Linux => BackendType::EbpfLinux,
-        Platform::MacOS => BackendType::MacOSDesktop,
-        Platform::Windows => BackendType::WindowsDesktop,
         Platform::Unknown => return, // Skip test on unknown platforms
     };
 
@@ -103,8 +101,6 @@ async fn test_lifecycle_manager_auto_start() {
 
     let backend_type = match current_platform {
         Platform::Linux => BackendType::EbpfLinux,
-        Platform::MacOS => BackendType::MacOSDesktop,
-        Platform::Windows => BackendType::WindowsDesktop,
         Platform::Unknown => return,
     };
 
@@ -131,8 +127,6 @@ async fn test_lifecycle_manager_stop() {
 
     let backend_type = match current_platform {
         Platform::Linux => BackendType::EbpfLinux,
-        Platform::MacOS => BackendType::MacOSDesktop,
-        Platform::Windows => BackendType::WindowsDesktop,
         Platform::Unknown => return,
     };
 
@@ -164,8 +158,6 @@ async fn test_lifecycle_manager_health_check() {
 
     let backend_type = match current_platform {
         Platform::Linux => BackendType::EbpfLinux,
-        Platform::MacOS => BackendType::MacOSDesktop,
-        Platform::Windows => BackendType::WindowsDesktop,
         Platform::Unknown => return,
     };
 
@@ -200,8 +192,6 @@ async fn test_lifecycle_manager_reconfigure() {
 
     let backend_type = match current_platform {
         Platform::Linux => BackendType::EbpfLinux,
-        Platform::MacOS => BackendType::MacOSDesktop,
-        Platform::Windows => BackendType::WindowsDesktop,
         Platform::Unknown => return,
     };
 
@@ -254,16 +244,15 @@ async fn test_lifecycle_manager_switch_backends() {
         return;
     }
 
+    // With only one production backend, the "switch backends" flow
+    // collapses to re-starting the same type; keeping the test as a
+    // smoke check that start_backend is idempotent on re-entry.
     let backend_type1 = BackendType::EbpfLinux;
-    let backend_type2 = BackendType::MacOSDesktop;
+    let backend_type2 = BackendType::EbpfLinux;
 
     registry.register_factory(
         backend_type1.clone(),
         Box::new(MockFactory::new(backend_type1.clone(), Platform::Linux)),
-    );
-    registry.register_factory(
-        backend_type2.clone(),
-        Box::new(MockFactory::new(backend_type2.clone(), Platform::MacOS)),
     );
 
     let lifecycle = BackendLifecycleManager::new(Arc::new(registry));
@@ -299,8 +288,6 @@ async fn test_lifecycle_manager_current_backend() {
 
     let backend_type = match current_platform {
         Platform::Linux => BackendType::EbpfLinux,
-        Platform::MacOS => BackendType::MacOSDesktop,
-        Platform::Windows => BackendType::WindowsDesktop,
         Platform::Unknown => return,
     };
 

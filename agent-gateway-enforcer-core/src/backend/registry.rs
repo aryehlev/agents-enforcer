@@ -202,23 +202,6 @@ impl BackendRegistry {
             // );
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            // MacOSDesktop backend would be registered here
-            // self.register_factory(
-            //     BackendType::MacOSDesktop,
-            //     Box::new(backends::macos_desktop::Factory::new())
-            // );
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            // WindowsDesktop backend would be registered here
-            // self.register_factory(
-            //     BackendType::WindowsDesktop,
-            //     Box::new(backends::windows_desktop::Factory::new())
-            // );
-        }
     }
 
     /// Check if a backend is registered
@@ -418,7 +401,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_nonexistent_backend() {
         let registry = BackendRegistry::new();
-        let result = registry.get_backend(&BackendType::MacOSDesktop).await;
+        // Register nothing, then ask for Auto — registry should error.
+        let result = registry.get_backend(&BackendType::Auto).await;
         assert!(result.is_err());
     }
 
@@ -442,9 +426,7 @@ mod tests {
 
         let backend_type = match current_platform {
             Platform::Linux => BackendType::EbpfLinux,
-            Platform::MacOS => BackendType::MacOSDesktop,
-            Platform::Windows => BackendType::WindowsDesktop,
-            Platform::Unknown => return, // Skip test on unknown platforms
+            Platform::Unknown => return, // non-Linux hosts have nothing to register
         };
 
         let factory = Box::new(MockFactory::new(backend_type.clone(), current_platform));
