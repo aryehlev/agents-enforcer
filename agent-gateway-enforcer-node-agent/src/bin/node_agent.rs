@@ -37,6 +37,19 @@ struct Args {
     /// `AgentViolation` CRs.
     #[arg(long, default_value = "", env = "ENFORCER_EVENTS_URL")]
     controller_events_url: String,
+
+    /// Directory mounted from the same `AgentCapability` ConfigMap
+    /// the LLM proxy reads. Drives the eBPF-only LLM enforcement
+    /// path: the TLS uprobe consumer looks up `<ns>/<pod>` here on
+    /// every captured request. Empty/missing dir = LLM enforcement
+    /// is observe-only (no caps loaded → every captured request
+    /// denies as `no_capability` if attribution is set).
+    #[arg(
+        long,
+        default_value = "/etc/agents-enforcer/capabilities",
+        env = "ENFORCER_CAPABILITIES_DIR"
+    )]
+    capabilities_dir: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -58,6 +71,58 @@ async fn main() -> anyhow::Result<()> {
         .context("backend initialize")?;
     backend.start().await.context("backend start")?;
     let backend = Arc::new(backend);
+
+    // Load LLM capability bundles for the eBPF-only enforcement
+    // path. Same ConfigMap the LLM proxy reads — operators write
+    // one policy and both modes apply it.
+    let llm_caps = backend.llm_capabilities();
+    match agent_gateway_enforcer_backend_ebpf_linux::llm::load_from_dir(&args.capabilities_dir) {
+        Ok(map) => {
+            let n = map.len();
+            llm_caps.replace(map);
+            tracing::info!(
+                count = n,
+                dir = %args.capabilities_dir.display(),
+                "llm capabilities loaded"
+            );
+        }
+        Err(e) => tracing::warn!(
+            err = %e,
+            dir = %args.capabilities_dir.display(),
+            "llm capability load failed; eBPF-only LLM enforcement degraded"
+        ),
+    }
+
+    // SIGHUP reload — operators kubectl-edit the ConfigMap then
+    // `kill -HUP`. Tracks the LLM proxy's behavior verbatim so
+    // operations stay symmetric across enforcement modes.
+    {
+        let llm_caps = llm_caps.clone();
+        let dir = args.capabilities_dir.clone();
+        tokio::spawn(async move {
+            let mut sig = match tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::hangup(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(err = %e, "SIGHUP unavailable; reload disabled");
+                    return;
+                }
+            };
+            while sig.recv().await.is_some() {
+                match agent_gateway_enforcer_backend_ebpf_linux::llm::load_from_dir(&dir) {
+                    Ok(map) => {
+                        let n = map.len();
+                        llm_caps.replace(map);
+                        tracing::info!(count = n, "llm capabilities reloaded via SIGHUP");
+                    }
+                    Err(e) => {
+                        tracing::warn!(err = %e, "llm capability reload failed; keeping old set")
+                    }
+                }
+            }
+        });
+    }
 
     // Reporter — subscribes to the backend's decision events and
     // POSTs to the controller. Disabled when no URL is configured.

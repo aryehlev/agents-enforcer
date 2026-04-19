@@ -74,6 +74,15 @@ spec:
             - name: sys-fs-cgroup
               mountPath: /sys/fs/cgroup
               readOnly: false
+            {{- if .Values.llmProxy.enabled }}
+            # Same ConfigMap the LLM proxy mounts. Lets the eBPF-only
+            # path enforce against identical capability YAMLs without
+            # an out-of-band sync. Operators editing one CR see both
+            # enforcement modes update on the next SIGHUP.
+            - name: capabilities
+              mountPath: /etc/agents-enforcer/capabilities
+              readOnly: true
+            {{- end }}
       volumes:
         - name: sys-fs-bpf
           hostPath:
@@ -83,6 +92,12 @@ spec:
           hostPath:
             path: /sys/fs/cgroup
             type: Directory
+        {{- if .Values.llmProxy.enabled }}
+        - name: capabilities
+          configMap:
+            name: {{ include "agents-enforcer.fullname" . }}-capabilities
+            optional: true
+        {{- end }}
       {{- with .Values.nodeAgent.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

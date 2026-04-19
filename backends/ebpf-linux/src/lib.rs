@@ -10,6 +10,7 @@
 #![warn(missing_docs)]
 
 pub mod decision_events;
+pub mod llm;
 
 use agent_gateway_enforcer_core::backend::{
     BackendCapabilities, BackendHealth, BackendType, EnforcementBackend, EventHandler,
@@ -114,6 +115,13 @@ pub struct EbpfLinuxBackend {
     /// `DecisionEventSource::subscribe`. Kept bounded so a slow
     /// subscriber can only lag, not block the emitter.
     decisions_tx: broadcast::Sender<DecisionEventWire>,
+    /// Per-agent LLM capability bundles. Drives the eBPF-only
+    /// "agentless" enforcement path: the TLS ringbuf consumer
+    /// looks up `<namespace>/<pod>` here after attribution. Empty
+    /// = enforcement is observation-only (every captured request
+    /// becomes a `NoCapability` deny if anything's set, otherwise
+    /// nothing emits).
+    llm_caps: Arc<llm::LlmCapabilityStore>,
 }
 
 /// Tracks which pods are attached to which compiled policy bundle.
@@ -156,6 +164,10 @@ struct EbpfProgramState {
     network_program: Option<Bpf>,
     /// LSM file access eBPF program
     lsm_program: Option<Bpf>,
+    /// TLS uprobe program for the eBPF-only LLM enforcement path.
+    /// Optional because uprobe attach to libssl only works when
+    /// libssl is present + the target process is dynamically linked.
+    tls_program: Option<Bpf>,
 }
 
 #[cfg(target_os = "linux")]
@@ -164,6 +176,7 @@ impl EbpfProgramState {
         Self {
             network_program: None,
             lsm_program: None,
+            tls_program: None,
         }
     }
 }
@@ -299,7 +312,17 @@ impl EbpfLinuxBackend {
             pod_registry: Arc::new(Mutex::new(PodRegistry::default())),
             attribution: Arc::new(Mutex::new(Attributor::new())),
             decisions_tx,
+            llm_caps: Arc::new(llm::LlmCapabilityStore::new()),
         }
+    }
+
+    /// Hand-off to operators: the in-memory capability store the
+    /// TLS ringbuf consumer reads on every parsed LLM request.
+    /// The node-agent binary populates this on startup + SIGHUP
+    /// from the same ConfigMap-mounted YAMLs the LLM proxy reads,
+    /// so the two enforcement modes stay in sync.
+    pub fn llm_capabilities(&self) -> Arc<llm::LlmCapabilityStore> {
+        self.llm_caps.clone()
     }
 
     /// Test-only hook: push an attribution entry so tests can
@@ -431,6 +454,40 @@ impl EbpfLinuxBackend {
                 lsm_path
             );
             tracing::warn!("Compile with: cd backends/ebpf-linux/ebpf && make");
+        }
+
+        // --- TLS uprobe program (eBPF-only LLM enforcement) ---
+        // Optional. Loaded but not attached here — uprobe attachment
+        // is per-target-binary (libssl on the agent process), so
+        // wire-up moves to a follow-on attach helper. Keeping the
+        // load here means the ringbuf consumer has something to
+        // drain even when we haven't yet picked target processes.
+        let tls_path = self.find_ebpf_object("tls.o")?;
+        if tls_path.exists() {
+            tracing::info!("Loading TLS uprobe eBPF program from {:?}", tls_path);
+            match BpfLoader::new()
+                .btf(btf.as_ref())
+                .load_file(&tls_path)
+            {
+                Ok(bpf) => {
+                    let mut state = self
+                        .ebpf_state
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("Failed to acquire eBPF state lock: {}", e))?;
+                    state.tls_program = Some(bpf);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to load TLS eBPF program: {} - LLM enforcement disabled",
+                        e
+                    );
+                }
+            }
+        } else {
+            tracing::debug!(
+                "TLS eBPF object not found at {:?} - LLM enforcement disabled",
+                tls_path
+            );
         }
 
         // --- Network program (cgroup/connect4/6) ---
@@ -996,6 +1053,23 @@ impl EbpfLinuxBackend {
             }
         }
 
+        // The TLS uprobe program ships its own ringbuf separately;
+        // it's optional because the uprobes only attach when libssl
+        // is present on the target binary. Loaded via a separate
+        // .o so kernels without uprobes still get net + lsm.
+        if let Some(bpf) = state.tls_program.as_mut() {
+            if let Some(map) = bpf.take_map("tls_events") {
+                let rb: RingBuf<_> = map
+                    .try_into()
+                    .map_err(|e| anyhow::anyhow!("tls_events → RingBuf: {}", e))?;
+                let tx = self.decisions_tx.clone();
+                let attribution = self.attribution.clone();
+                let caps = self.llm_caps.clone();
+                tokio::spawn(Self::tls_consumer_loop(rb, attribution, caps, tx));
+                tracing::info!("tls events ringbuf consumer started");
+            }
+        }
+
         Ok(())
     }
 
@@ -1055,6 +1129,98 @@ impl EbpfLinuxBackend {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
+    }
+
+    /// Drain `tls_events` and emit attributed `DecisionEventWire`s
+    /// for any captured LLM request that violates the pod's
+    /// capability bundle. The pure decision logic lives in
+    /// `Self::process_tls_chunk` so it can be unit-tested without
+    /// the ringbuf.
+    #[cfg(target_os = "linux")]
+    async fn tls_consumer_loop(
+        mut rb: aya::maps::RingBuf<aya::maps::MapData>,
+        attribution: Arc<Mutex<Attributor>>,
+        caps: Arc<llm::LlmCapabilityStore>,
+        tx: broadcast::Sender<DecisionEventWire>,
+    ) {
+        use agent_gateway_enforcer_common::TlsEventHdr;
+        let hdr_size = std::mem::size_of::<TlsEventHdr>();
+        // One reassembler per consumer task — TLS events serialize
+        // through here in order, so a single map is fine.
+        let mut reasm = llm::Reassembler::new();
+        loop {
+            let mut drained = 0usize;
+            while let Some(item) = rb.next() {
+                drained += 1;
+                let bytes: &[u8] = &item;
+                if bytes.len() < hdr_size {
+                    continue;
+                }
+                let hdr: TlsEventHdr =
+                    unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const TlsEventHdr) };
+                let payload_len = (hdr.len as usize).min(bytes.len() - hdr_size);
+                let payload = &bytes[hdr_size..hdr_size + payload_len];
+
+                if let Some(ev) =
+                    Self::process_tls_chunk(&hdr, payload, &mut reasm, &attribution, &caps)
+                {
+                    let _ = tx.send(ev);
+                }
+            }
+            if drained == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+    }
+
+    /// Pure helper: feed a TLS chunk into the reassembler, look up
+    /// attribution + capability when a request is complete, and
+    /// produce a `DecisionEventWire` if the request violates policy.
+    /// Returns `None` for allows / non-LLM / buffering / unattributed
+    /// (host networking) — the consumer simply skips those.
+    fn process_tls_chunk(
+        hdr: &agent_gateway_enforcer_common::TlsEventHdr,
+        payload: &[u8],
+        reasm: &mut llm::Reassembler,
+        attribution: &Arc<Mutex<Attributor>>,
+        caps: &Arc<llm::LlmCapabilityStore>,
+    ) -> Option<DecisionEventWire> {
+        use agent_gateway_enforcer_common::tls;
+        // SSL_read events would let us track response usage; the
+        // current decision path only needs request data, so skip
+        // to keep the reassembler from co-mingling read/write
+        // streams under the same conn_id.
+        if hdr.direction != tls::TLS_WRITE {
+            return None;
+        }
+        let now = std::time::Instant::now();
+        let outcome = reasm.push(hdr.conn_id, payload, now);
+        let llm::ChunkOutcome::Complete(facts) = outcome else {
+            return None;
+        };
+
+        // Resolve cgroup → pod → capability.
+        let attr = attribution.lock().ok()?.get(hdr.cgroup_id).cloned()?;
+        let agent_id = format!("{}/{}", attr.namespace, attr.pod_name);
+        let cap = caps.get(&agent_id);
+        let llm::LlmVerdict::Deny(reason) = llm::decide(&facts, cap.as_ref()) else {
+            return None;
+        };
+
+        // EgressBlocked is the closest existing ViolationKind for
+        // an LLM-layer denial; the `detail` carries the reason
+        // label so dashboards can split them out without a CRD
+        // migration. (A dedicated `LlmDenied` kind is a follow-on
+        // — it's a proto change in the controller's events API.)
+        let detail = format!("llm:{} {}", reason.label(), reason.detail(&facts));
+        Some(DecisionEventWire::now(
+            &attr.namespace,
+            &attr.pod_name,
+            &attr.pod_uid,
+            &attr.policy_name,
+            crate::decision_events::ViolationKind::EgressBlocked,
+            detail,
+        ))
     }
 
     /// Same shape as `net_consumer_loop`, but for the LSM ringbuf.
@@ -1720,6 +1886,198 @@ mod tests {
         );
         // Allowed opens map to None — they're audit, not violations.
         assert_eq!(EbpfLinuxBackend::lsm_kind_for(FILE_EVENT_OPEN), None);
+    }
+
+    // --- TLS / LLM consumer wiring ---------------------------------
+    // Pure tests for `process_tls_chunk` exercise the full path
+    // ringbuf-event → reassembler → attribution → capability →
+    // decision → DecisionEventWire without touching eBPF or the
+    // network. This is what the eBPF-only enforcement claim rests
+    // on; pin it here so a refactor that drops the deny path
+    // breaks loudly.
+
+    fn tls_hdr(direction: u8, cgroup_id: u64, conn_id: u64, len: u32) -> agent_gateway_enforcer_common::TlsEventHdr {
+        agent_gateway_enforcer_common::TlsEventHdr {
+            cgroup_id,
+            conn_id,
+            pid: 1234,
+            tgid: 1234,
+            len,
+            direction,
+            truncated: 0,
+            _pad: [0; 2],
+        }
+    }
+
+    fn full_openai(model: &str) -> Vec<u8> {
+        let body = format!(r#"{{"model":"{}","messages":[]}}"#, model);
+        format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: api.openai.com\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .into_bytes()
+    }
+
+    fn seed_attribution(b: &EbpfLinuxBackend, cgid: u64) {
+        b.test_record_attribution(
+            cgid,
+            PodAttribution {
+                namespace: "prod".into(),
+                pod_name: "agent-0".into(),
+                pod_uid: "uid-A".into(),
+                policy_name: "openai-only".into(),
+            },
+        );
+    }
+
+    #[test]
+    fn process_tls_chunk_denies_disallowed_model() {
+        let b = EbpfLinuxBackend::new();
+        seed_attribution(&b, 42);
+        b.llm_caps.replace(std::collections::HashMap::from([(
+            "prod/agent-0".to_string(),
+            llm::LlmCapability {
+                allowed_models: vec!["claude-sonnet-4.6".into()],
+                allowed_tools: vec![],
+                max_output_tokens: None,
+            },
+        )]));
+
+        let mut reasm = llm::Reassembler::new();
+        let bytes = full_openai("gpt-4o");
+        let hdr = tls_hdr(
+            agent_gateway_enforcer_common::tls::TLS_WRITE,
+            42,
+            999,
+            bytes.len() as u32,
+        );
+        let ev = EbpfLinuxBackend::process_tls_chunk(
+            &hdr,
+            &bytes,
+            &mut reasm,
+            &b.attribution,
+            &b.llm_caps,
+        )
+        .expect("disallowed model should produce a deny event");
+
+        assert_eq!(ev.namespace, "prod");
+        assert_eq!(ev.pod_uid, "uid-A");
+        assert_eq!(ev.policy_name, "openai-only");
+        assert!(ev.detail.starts_with("llm:model_not_allowed"));
+        assert!(ev.detail.contains("gpt-4o"));
+    }
+
+    #[test]
+    fn process_tls_chunk_allows_request_under_capability() {
+        // Allowed-model request must NOT emit a DecisionEventWire —
+        // the eBPF-only mode is a deny-by-default audit channel,
+        // not a "log every API call" channel.
+        let b = EbpfLinuxBackend::new();
+        seed_attribution(&b, 42);
+        b.llm_caps.replace(std::collections::HashMap::from([(
+            "prod/agent-0".to_string(),
+            llm::LlmCapability {
+                allowed_models: vec!["gpt-4o".into()],
+                allowed_tools: vec![],
+                max_output_tokens: None,
+            },
+        )]));
+        let mut reasm = llm::Reassembler::new();
+        let bytes = full_openai("gpt-4o");
+        let hdr = tls_hdr(
+            agent_gateway_enforcer_common::tls::TLS_WRITE,
+            42,
+            999,
+            bytes.len() as u32,
+        );
+        assert!(EbpfLinuxBackend::process_tls_chunk(
+            &hdr,
+            &bytes,
+            &mut reasm,
+            &b.attribution,
+            &b.llm_caps,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn process_tls_chunk_unattributed_cgroup_is_silent() {
+        // Host-networking processes (no PodRegistry attach) emit
+        // events with cgroup_id=0; we must skip rather than deny —
+        // mis-attributing a host-side curl to a random pod's
+        // capability would be a security bug AND a noise bug.
+        let b = EbpfLinuxBackend::new();
+        // No seed_attribution call.
+        let mut reasm = llm::Reassembler::new();
+        let bytes = full_openai("gpt-4o");
+        let hdr = tls_hdr(
+            agent_gateway_enforcer_common::tls::TLS_WRITE,
+            /* cgroup */ 0,
+            999,
+            bytes.len() as u32,
+        );
+        assert!(EbpfLinuxBackend::process_tls_chunk(
+            &hdr,
+            &bytes,
+            &mut reasm,
+            &b.attribution,
+            &b.llm_caps,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn process_tls_chunk_pod_without_capability_denies_no_capability() {
+        // Attributable but no bundle → conservative deny. Operators
+        // who want "no bundle = allow" set an empty bundle; absence
+        // means the agent isn't enrolled and we'd rather alert.
+        let b = EbpfLinuxBackend::new();
+        seed_attribution(&b, 42);
+        // No llm_caps.replace → empty store.
+        let mut reasm = llm::Reassembler::new();
+        let bytes = full_openai("gpt-4o");
+        let hdr = tls_hdr(
+            agent_gateway_enforcer_common::tls::TLS_WRITE,
+            42,
+            999,
+            bytes.len() as u32,
+        );
+        let ev = EbpfLinuxBackend::process_tls_chunk(
+            &hdr,
+            &bytes,
+            &mut reasm,
+            &b.attribution,
+            &b.llm_caps,
+        )
+        .expect("missing bundle is a deny");
+        assert!(ev.detail.starts_with("llm:no_capability"));
+    }
+
+    #[test]
+    fn process_tls_chunk_skips_ssl_read_events() {
+        // Only SSL_write carries the request body; SSL_read frames
+        // are response chunks. They share the conn_id key with the
+        // request, so we must not feed them to the same reassembler
+        // — that would scramble both streams.
+        let b = EbpfLinuxBackend::new();
+        seed_attribution(&b, 42);
+        let mut reasm = llm::Reassembler::new();
+        let bytes = full_openai("gpt-4o");
+        let hdr = tls_hdr(
+            agent_gateway_enforcer_common::tls::TLS_READ,
+            42,
+            999,
+            bytes.len() as u32,
+        );
+        assert!(EbpfLinuxBackend::process_tls_chunk(
+            &hdr,
+            &bytes,
+            &mut reasm,
+            &b.attribution,
+            &b.llm_caps,
+        )
+        .is_none());
     }
 
     #[test]

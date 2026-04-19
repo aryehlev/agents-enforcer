@@ -299,6 +299,55 @@ pub const FILE_EVENT_EXEC_BLOCKED: u32 = 3;
 /// `file_event.event_type` tag: `path_unlink|mkdir|rmdir` denied a mutation.
 pub const FILE_EVENT_PATH_BLOCKED: u32 = 4;
 
+/// Direction tag for [`TlsEventHdr::direction`].
+pub mod tls {
+    /// Plaintext captured pre-encryption from `SSL_write`.
+    pub const TLS_WRITE: u8 = 1;
+    /// Plaintext captured post-decryption from `SSL_read`.
+    pub const TLS_READ: u8 = 2;
+}
+
+/// Maximum captured payload bytes per TLS event. Must equal
+/// `MAX_PLAINTEXT` in `backends/ebpf-linux/ebpf/tls.c`.
+pub const TLS_MAX_PLAINTEXT: usize = 16384;
+
+/// Header that prefixes every TLS plaintext event in the
+/// `tls_events` ringbuf. Mirrors `struct tls_event_hdr` in
+/// `backends/ebpf-linux/ebpf/tls.c`.
+///
+/// The kernel writes a fixed-layout struct (`tls_event_hdr` followed
+/// by `MAX_PLAINTEXT` bytes of payload). Userspace reads
+/// `core::mem::size_of::<TlsEventHdr>()` for the header, then
+/// `hdr.len` bytes of plaintext.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TlsEventHdr {
+    /// Cgroup id of the process that made the SSL_* call. Used to
+    /// attribute the event back to a pod.
+    pub cgroup_id: u64,
+    /// Opaque connection identifier — the `SSL *` userspace pointer.
+    /// Stable for the life of the connection; reassemblers key on it.
+    pub conn_id: u64,
+    /// Linux PID (LWP id).
+    pub pid: u32,
+    /// Linux TGID (process id).
+    pub tgid: u32,
+    /// Number of plaintext bytes that follow this header
+    /// (`<= TLS_MAX_PLAINTEXT`).
+    pub len: u32,
+    /// One of [`tls::TLS_WRITE`] / [`tls::TLS_READ`].
+    pub direction: u8,
+    /// 1 when the kernel hit `MAX_PLAINTEXT` and chopped the
+    /// payload — userspace treats truncated streams as
+    /// "give up parsing" rather than guess the rest of the JSON.
+    pub truncated: u8,
+    /// Padding to keep size 8-aligned and matching the C struct.
+    pub _pad: [u8; 2],
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for TlsEventHdr {}
+
 // Userspace helpers — require `std` (for `String`), so gated on the
 // `user` feature. The kernel-side aya Pod impl above stays feature-free.
 #[cfg(any(feature = "user", test))]
@@ -469,6 +518,21 @@ mod tests {
         // 8 (cgroup_id) + 4 + 4 + 4 + 4 + 16 (comm) + 256 (path) = 296.
         // Must match `sizeof(struct file_event)` in `ebpf/lsm.c`.
         assert_eq!(core::mem::size_of::<FileEvent>(), 296);
+    }
+
+    #[test]
+    fn test_tls_event_hdr_size() {
+        // 8 (cgroup_id) + 8 (conn_id) + 4 (pid) + 4 (tgid) + 4 (len)
+        // + 1 (direction) + 1 (truncated) + 2 (pad) = 32 bytes.
+        // Must match `sizeof(struct tls_event_hdr)` in `ebpf/tls.c`.
+        assert_eq!(core::mem::size_of::<TlsEventHdr>(), 32);
+    }
+
+    #[test]
+    fn tls_direction_constants_match_c_macros() {
+        // Trip-wire if someone renumbers the C side.
+        assert_eq!(tls::TLS_WRITE, 1);
+        assert_eq!(tls::TLS_READ, 2);
     }
 
     #[test]

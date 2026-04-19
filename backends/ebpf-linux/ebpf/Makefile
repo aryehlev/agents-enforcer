@@ -20,7 +20,10 @@ CLANG_FLAGS := -target bpf \
     -Wall -Werror
 
 # Source files
-SRCS := lsm.c network.c
+# `tls.c` carries the SSL_write/SSL_read uprobes for the eBPF-only
+# LLM enforcement path; loaded by the userspace backend separately
+# from network/lsm so kernels without uprobes still get the rest.
+SRCS := lsm.c network.c tls.c
 OBJS := $(SRCS:.c=.o)
 
 .PHONY: all clean install
