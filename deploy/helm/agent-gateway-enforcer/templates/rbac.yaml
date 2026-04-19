@@ -2,30 +2,45 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "agent-gateway-enforcer.fullname" . }}
+  name: {{ include "agents-enforcer.fullname" . }}
   labels:
-    {{- include "agent-gateway-enforcer.labels" . | nindent 4 }}
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
 rules:
-  # Required for eBPF operations
+  - apiGroups: ["agents.enforcer.io"]
+    resources:
+      - agentpolicies
+      - agentpolicies/status
+      - agentpolicies/finalizers
+      - gatewaycatalogs
+      - enforcerconfigs
+      - agentviolations
+    # `delete` is for AgentViolation TTL GC; AgentPolicy objects are
+    # never deleted by the controller.
+    verbs: ["get", "list", "watch", "patch", "update", "create", "delete"]
   - apiGroups: [""]
-    resources: ["nodes"]
+    resources: ["pods", "namespaces", "nodes"]
+    # Nodes for hostIP lookup; pods for matching; namespaces for
+    # label/selector filtering.
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "agent-gateway-enforcer.fullname" . }}
+  name: {{ include "agents-enforcer.fullname" . }}
   labels:
-    {{- include "agent-gateway-enforcer.labels" . | nindent 4 }}
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "agent-gateway-enforcer.fullname" . }}
+  name: {{ include "agents-enforcer.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "agent-gateway-enforcer.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "agents-enforcer.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
 {{- end }}

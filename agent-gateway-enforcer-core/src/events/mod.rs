@@ -207,10 +207,6 @@ impl std::fmt::Display for EventType {
 pub enum EventSource {
     /// Linux eBPF backend
     EbpfLinux,
-    /// macOS desktop backend
-    MacOSDesktop,
-    /// Windows desktop backend
-    WindowsDesktop,
     /// Core system
     Core,
     /// Configuration system
@@ -229,8 +225,6 @@ impl std::fmt::Display for EventSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EbpfLinux => write!(f, "ebpf_linux"),
-            Self::MacOSDesktop => write!(f, "macos_desktop"),
-            Self::WindowsDesktop => write!(f, "windows_desktop"),
             Self::Core => write!(f, "core"),
             Self::Config => write!(f, "config"),
             Self::Metrics => write!(f, "metrics"),
@@ -246,8 +240,6 @@ impl EventSource {
     pub fn current_platform() -> Self {
         match crate::backend::Platform::current() {
             crate::backend::Platform::Linux => Self::EbpfLinux,
-            crate::backend::Platform::MacOS => Self::MacOSDesktop,
-            crate::backend::Platform::Windows => Self::WindowsDesktop,
             _ => Self::Core,
         }
     }
@@ -670,7 +662,7 @@ mod tests {
             SecurityThreatType::Malware,
             SecuritySeverity::High,
             "Suspicious file detected".to_string(),
-            EventSource::MacOSDesktop,
+            EventSource::EbpfLinux,
         );
 
         assert_eq!(event.event_type, EventType::Security);

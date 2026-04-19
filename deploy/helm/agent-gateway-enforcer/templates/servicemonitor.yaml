@@ -1,24 +1,24 @@
-{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled -}}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "agent-gateway-enforcer.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "agents-enforcer.fullname" . }}
+  namespace: {{ .Values.namespace }}
   labels:
-    {{- include "agent-gateway-enforcer.labels" . | nindent 4 }}
+    {{- include "agents-enforcer.labels" . | nindent 4 }}
     {{- with .Values.metrics.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   selector:
     matchLabels:
-      {{- include "agent-gateway-enforcer.selectorLabels" . | nindent 6 }}
+      {{- include "agents-enforcer.labels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.namespace }}
   endpoints:
     - port: metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
       path: /metrics
-  namespaceSelector:
-    matchNames:
-      - {{ .Release.Namespace }}
-{{- end }}
+{{- end -}}

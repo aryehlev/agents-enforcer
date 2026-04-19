@@ -1,68 +1,42 @@
 {{/*
-Expand the name of the chart.
+Common helpers for the agents-enforcer chart.
+Everything in this file is shared by the controller Deployment and
+the node-agent DaemonSet so their labels/selectors stay in sync.
 */}}
-{{- define "agent-gateway-enforcer.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
-{{- end }}
 
-{{/*
-Create a default fully qualified app name.
-*/}}
-{{- define "agent-gateway-enforcer.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-{{- end }}
-{{- end }}
+{{- define "agents-enforcer.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 
-{{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "agent-gateway-enforcer.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
+{{- define "agents-enforcer.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
 
-{{/*
-Common labels
-*/}}
-{{- define "agent-gateway-enforcer.labels" -}}
-helm.sh/chart: {{ include "agent-gateway-enforcer.chart" . }}
-{{ include "agent-gateway-enforcer.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- end }}
+{{- define "agents-enforcer.controller.fullname" -}}
+{{- printf "%s-controller" (include "agents-enforcer.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 
-{{/*
-Selector labels
-*/}}
-{{- define "agent-gateway-enforcer.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agent-gateway-enforcer.name" . }}
+{{- define "agents-enforcer.nodeAgent.fullname" -}}
+{{- printf "%s-node-agent" (include "agents-enforcer.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "agents-enforcer.labels" -}}
+app.kubernetes.io/name: {{ include "agents-enforcer.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: agents-enforcer
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{- end -}}
 
-{{/*
-Create the name of the service account to use
-*/}}
-{{- define "agent-gateway-enforcer.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "agent-gateway-enforcer.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}
-
-{{/*
-Image name with tag
-*/}}
-{{- define "agent-gateway-enforcer.image" -}}
-{{- $tag := .Values.image.tag | default .Chart.AppVersion }}
-{{- printf "%s:%s" .Values.image.repository $tag }}
-{{- end }}
+{{- define "agents-enforcer.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{ include "agents-enforcer.fullname" . }}
+{{- else -}}
+default
+{{- end -}}
+{{- end -}}

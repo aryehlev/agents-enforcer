@@ -1,0 +1,17 @@
+apiVersion: agents.enforcer.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: ai-agent
+  namespace: prod
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-agent
+  egress:
+    defaultAction: Deny
+    gatewayRefs: [openai, internal-redis]
+  exec:
+    allowedBinaries:
+      - /usr/local/bin/agent
+      - /usr/bin/python3
+  blockMutations: true

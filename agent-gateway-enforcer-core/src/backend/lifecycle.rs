@@ -204,7 +204,7 @@ impl BackendLifecycleManager {
     /// ```
     pub async fn health_check(&self) -> Result<BackendHealth> {
         if let Some(backend) = self.current_backend().await {
-            backend.health_check()
+            backend.health_check().await
         } else {
             Ok(BackendHealth {
                 status: HealthStatus::Unknown,
@@ -237,8 +237,8 @@ impl BackendLifecycleManager {
     /// ```
     pub async fn reconfigure(&self, config: &UnifiedConfig) -> Result<()> {
         if let Some(backend) = self.current_backend().await {
-            backend.configure_gateways(&config.gateways)?;
-            backend.configure_file_access(&config.file_access)?;
+            backend.configure_gateways(&config.gateways).await?;
+            backend.configure_file_access(&config.file_access).await?;
             Ok(())
         } else {
             Err(anyhow::anyhow!("No backend is currently running"))

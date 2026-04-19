@@ -48,14 +48,14 @@ impl Default for BackendConfig {
     }
 }
 
-/// Supported backend types
+/// Supported backend types. Linux-only; kept as an enum so future
+/// Linux variants (e.g. tc-only, Cilium-hosted) can be added without
+/// a breaking config schema change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendType {
     Auto,
     EbpfLinux,
-    MacOSDesktop,
-    WindowsDesktop,
 }
 
 /// Gateway configuration for network enforcement
@@ -376,35 +376,27 @@ impl Default for AgentPermissions {
     }
 }
 
-/// Platform detection utilities
+/// Platform detection utilities. The project is Kubernetes-native
+/// and Linux-only; any other host falls back to `Linux` so config
+/// validation doesn't crash mid-serde.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Platform {
     Linux,
-    MacOS,
-    Windows,
 }
 
 impl Platform {
-    /// Get current platform
+    /// Get current platform. Always `Linux`; tests that want to
+    /// simulate another host should inject `Platform::current` via
+    /// a mock.
     pub fn current() -> Self {
-        #[cfg(target_os = "linux")]
-        return Platform::Linux;
-        #[cfg(target_os = "macos")]
-        return Platform::MacOS;
-        #[cfg(target_os = "windows")]
-        return Platform::Windows;
-
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        return Platform::Linux; // Default to Linux for unknown platforms
+        Platform::Linux
     }
 
-    /// Check if platform is supported
+    /// Whether the current platform is supported. Always true today
+    /// — retained for forward compatibility when we add Linux
+    /// variants (e.g. eBPF-less fallback).
     pub fn is_supported(&self) -> bool {
-        match self {
-            Platform::Linux => true,
-            Platform::MacOS => true,
-            Platform::Windows => false, // Not yet implemented
-        }
+        matches!(self, Platform::Linux)
     }
 }
 

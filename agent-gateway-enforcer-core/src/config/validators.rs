@@ -39,23 +39,6 @@ impl ConfigValidator for BackendValidator {
                     ));
                 }
             }
-            BackendType::MacOSDesktop => {
-                if Platform::current() != Platform::MacOS {
-                    return Err(anyhow::anyhow!(
-                        "macOS Desktop backend can only be used on macOS"
-                    ));
-                }
-            }
-            BackendType::WindowsDesktop => {
-                if Platform::current() != Platform::Windows {
-                    return Err(anyhow::anyhow!(
-                        "Windows Desktop backend can only be used on Windows"
-                    ));
-                }
-                return Err(anyhow::anyhow!(
-                    "Windows Desktop backend is not yet implemented"
-                ));
-            }
         }
 
         Ok(())
@@ -683,10 +666,6 @@ mod tests {
         let mut config = UnifiedConfig::default();
         config.backend.backend_type = BackendType::Auto;
         assert!(validator.validate(&config).await.is_ok());
-
-        // Test invalid backend for current platform
-        config.backend.backend_type = BackendType::WindowsDesktop;
-        assert!(validator.validate(&config).await.is_err());
     }
 
     #[tokio::test]
