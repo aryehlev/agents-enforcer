@@ -43,6 +43,9 @@ pub struct SymbolOffset {
     pub source: SymbolSource,
 }
 
+/// Which ELF table a symbol came from. Useful diagnostic for
+/// debugging "why didn't we find X" — a stripped binary would
+/// return `.dynsym` hits only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolSource {
     /// From the `.dynsym` section (exported / imported dynamic).
@@ -58,8 +61,8 @@ pub fn resolve_symbols(
     binary_path: &Path,
     wanted: &[&str],
 ) -> anyhow::Result<HashMap<String, SymbolOffset>> {
-    let data = std::fs::read(binary_path)
-        .with_context(|| format!("read {}", binary_path.display()))?;
+    let data =
+        std::fs::read(binary_path).with_context(|| format!("read {}", binary_path.display()))?;
     resolve_from_bytes(&data, wanted)
 }
 
@@ -76,7 +79,7 @@ pub fn resolve_from_bytes(
     // target), this is the authoritative table.
     for sym in file.dynamic_symbols() {
         if let Ok(name) = sym.name() {
-            if wanted.iter().any(|w| *w == name) {
+            if wanted.contains(&name) {
                 out.insert(
                     name.to_string(),
                     SymbolOffset {
@@ -95,7 +98,7 @@ pub fn resolve_from_bytes(
     if out.len() < wanted.len() {
         for sym in file.symbols() {
             if let Ok(name) = sym.name() {
-                if wanted.iter().any(|w| *w == name) && !out.contains_key(name) {
+                if wanted.contains(&name) && !out.contains_key(name) {
                     out.insert(
                         name.to_string(),
                         SymbolOffset {

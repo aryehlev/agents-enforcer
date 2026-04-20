@@ -122,11 +122,7 @@ impl Reassembler {
     /// Remove and return the buffer for `(conn_id, direction)`.
     /// Consumers call this after their parser confirms a full
     /// logical message has arrived.
-    pub fn take(
-        &mut self,
-        conn_id: u64,
-        direction: TlsDirection,
-    ) -> Option<ReassembledMessage> {
+    pub fn take(&mut self, conn_id: u64, direction: TlsDirection) -> Option<ReassembledMessage> {
         let buf = self.by_key.remove(&Key { conn_id, direction })?;
         Some(ReassembledMessage {
             plaintext: buf.bytes,

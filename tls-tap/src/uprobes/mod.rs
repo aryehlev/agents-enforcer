@@ -32,7 +32,7 @@ pub mod elf;
 pub mod recipes;
 
 pub use discovery::{discover_targets, ProbeTarget};
-pub use recipes::{openssl::OpenSsl, nodejs::NodeJs};
+pub use recipes::{nodejs::NodeJs, openssl::OpenSsl};
 
 /// A single uprobe to attach: binary path, offset within the
 /// binary, direction (entry / ret), and a logical name so the
@@ -83,10 +83,7 @@ pub trait ProbeRecipe: Send + Sync {
 /// that also dynamically links libssl") produces one plan per
 /// recipe — that's correct, since both stacks may actually be in
 /// use in the same process.
-pub fn plan_all(
-    recipes: &[Box<dyn ProbeRecipe>],
-    targets: &[ProbeTarget],
-) -> Vec<ProbePlan> {
+pub fn plan_all(recipes: &[Box<dyn ProbeRecipe>], targets: &[ProbeTarget]) -> Vec<ProbePlan> {
     let mut out = Vec::new();
     for t in targets {
         for r in recipes {
@@ -133,12 +130,7 @@ pub mod attach {
                 tracing::warn!(label = %plan.label, err = %e, "uprobe load failed");
                 continue;
             }
-            match program.attach(
-                None,
-                plan.offset,
-                &plan.binary_path,
-                /* pid */ None,
-            ) {
+            match program.attach(None, plan.offset, &plan.binary_path, /* pid */ None) {
                 Ok(_) => {
                     ok += 1;
                     tracing::info!(
@@ -202,8 +194,7 @@ mod tests {
     fn plan_all_dedups_identical_probes_across_recipes() {
         // Two recipes that return the exact same probe. Attaching
         // twice would double-fire the ringbuf. Dedup is the invariant.
-        let recipes: Vec<Box<dyn ProbeRecipe>> =
-            vec![Box::new(AlwaysMatch), Box::new(AlwaysMatch)];
+        let recipes: Vec<Box<dyn ProbeRecipe>> = vec![Box::new(AlwaysMatch), Box::new(AlwaysMatch)];
         let plans = plan_all(&recipes, &[fake_target()]);
         assert_eq!(plans.len(), 1);
     }
@@ -249,8 +240,7 @@ mod tests {
 
     #[test]
     fn plan_all_skips_non_matching_recipes() {
-        let recipes: Vec<Box<dyn ProbeRecipe>> =
-            vec![Box::new(NeverMatch), Box::new(AlwaysMatch)];
+        let recipes: Vec<Box<dyn ProbeRecipe>> = vec![Box::new(NeverMatch), Box::new(AlwaysMatch)];
         let plans = plan_all(&recipes, &[fake_target()]);
         assert_eq!(plans.len(), 1);
     }

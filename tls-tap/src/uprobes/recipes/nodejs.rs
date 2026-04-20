@@ -114,7 +114,9 @@ mod tests {
         // `nodeexporter` binary on a node.
         assert!(!is_node_executable(Path::new("/usr/bin/python3")));
         assert!(!is_node_executable(Path::new("/usr/bin/nodeinfo")));
-        assert!(!is_node_executable(Path::new("/usr/bin/prometheus-node-exporter")));
+        assert!(!is_node_executable(Path::new(
+            "/usr/bin/prometheus-node-exporter"
+        )));
         assert!(!is_node_executable(Path::new("/usr/bin/node.sh")));
     }
 

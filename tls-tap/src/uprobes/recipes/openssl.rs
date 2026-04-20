@@ -166,15 +166,11 @@ mod tests {
         );
         let plans = plans_from_symbols(std::path::Path::new("/lib/libssl.so.3"), &sym);
         assert_eq!(plans.len(), 3);
-        assert!(plans
-            .iter()
-            .any(|p| p.label == "SSL_write" && !p.is_ret));
+        assert!(plans.iter().any(|p| p.label == "SSL_write" && !p.is_ret));
         assert!(plans
             .iter()
             .any(|p| p.label == "SSL_read entry" && !p.is_ret));
-        assert!(plans
-            .iter()
-            .any(|p| p.label == "SSL_read ret" && p.is_ret));
+        assert!(plans.iter().any(|p| p.label == "SSL_read ret" && p.is_ret));
     }
 
     #[test]

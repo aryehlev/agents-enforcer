@@ -17,8 +17,8 @@
 // in `tls-tap-shared` so the eBPF program and this crate use the
 // same definitions. Re-exported here for ergonomic
 // `tls_tap::TlsEventHdr` usage.
-pub use tls_tap_shared::{TlsEventHdr, MAX_PLAINTEXT};
 use tls_tap_shared::direction;
+pub use tls_tap_shared::{TlsEventHdr, MAX_PLAINTEXT};
 
 /// Direction discriminator for [`TlsEvent`]. Keeps the userspace
 /// API enum-shaped while the wire format is a `u8`.

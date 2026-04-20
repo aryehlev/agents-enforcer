@@ -29,6 +29,4 @@ pub use tap_linux::Tap;
 
 pub use event::{TlsDirection, TlsEvent, TlsEventHdr};
 pub use reassembler::{ReassembledMessage, Reassembler};
-pub use uprobes::{
-    discover_targets, plan_all, ProbePlan, ProbeRecipe, ProbeTarget, recipes,
-};
+pub use uprobes::{discover_targets, plan_all, recipes, ProbePlan, ProbeRecipe, ProbeTarget};

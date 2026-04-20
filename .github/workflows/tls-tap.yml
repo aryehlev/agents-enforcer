@@ -1,0 +1,229 @@
+# tls-tap CI.
+#
+# Kept as its own workflow (separate from the agents-enforcer
+# top-level `ci.yml`) because the `tls-tap/` directory is designed
+# to be extracted into its own repo later — every job here must
+# work standalone with only the `tls-tap/` subtree present.
+#
+# Path filter: runs only when anything under tls-tap/ or this file
+# changes. The rest of the repo doesn't touch this code.
+
+name: tls-tap CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "tls-tap/**"
+      - ".github/workflows/tls-tap.yml"
+  pull_request:
+    paths:
+      - "tls-tap/**"
+      - ".github/workflows/tls-tap.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+
+  # ---------------------------------------------------------------
+  # Userspace — stable Rust, runs on every push. Fast feedback
+  # loop: fmt + clippy + test in under a minute on the cache hit.
+  # ---------------------------------------------------------------
+  userspace:
+    name: Userspace (stable)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tls-tap
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tls-tap
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        # -D warnings turns style nits into build failures — keeps
+        # the crate publishable without a warning backlog.
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --all-features
+
+      - name: build release binary
+        # Smoke-build the CLI to make sure the binary wiring (CLI
+        # feature, tokio flavors, clap derive) links cleanly. The
+        # binary itself runs only on Linux with eBPF, which the
+        # kind smoke-test job covers.
+        run: cargo build --release
+
+      - name: upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-tap-bin
+          path: tls-tap/target/release/tls-tap
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # eBPF program — nightly toolchain + bpfel-unknown-none target.
+  # Needs its own job because `-Z build-std=core` would poison the
+  # userspace build if we tried to share. This is also where the
+  # BPF verifier failures would surface first (at bpf-linker time).
+  # ---------------------------------------------------------------
+  bpf:
+    name: eBPF (nightly → bpfel-unknown-none)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tls-tap/bpf
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      # bpf-linker is what turns rust-compiled llvm-bc into ELF
+      # BPF objects. Pinned release so cache hits are stable; bump
+      # explicitly when aya-ebpf ups its requirement.
+      - name: install bpf-linker
+        run: cargo install bpf-linker --locked
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tls-tap/bpf
+          # Share cache per-toolchain — nightly churns rustc, don't
+          # cross-contaminate with the stable userspace cache.
+          shared-key: bpf-nightly
+
+      - name: build bpf object
+        run: >
+          cargo +nightly build --release
+          --target bpfel-unknown-none
+          -Z build-std=core
+
+      - name: upload bpf object
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-tap-bpf
+          path: tls-tap/bpf/target/bpfel-unknown-none/release/tls-tap-bpf
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Container image — multi-stage build defined in tls-tap/Dockerfile.
+  # Depends on both previous jobs so image builds only fire on a
+  # clean source + BPF pair. Pushed to ghcr on main only.
+  # ---------------------------------------------------------------
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    needs: [userspace, bpf]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to ghcr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build (and push on main)
+        uses: docker/build-push-action@v5
+        with:
+          context: tls-tap
+          file: tls-tap/Dockerfile
+          # PRs + branch pushes: build only, exercise the Dockerfile
+          # but don't publish. Main pushes: publish under :latest +
+          # the short SHA so deployers can pin.
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/tls-tap:latest
+            ghcr.io/${{ github.repository_owner }}/tls-tap:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------
+  # Smoke test — load the BPF object in a kind cluster and verify
+  # the DaemonSet reports ready. This catches verifier rejections
+  # that wouldn't show up at compile time (the verifier runs at
+  # load, which is why we can't know for sure until here).
+  #
+  # Kept `continue-on-error: true` for now because kind clusters
+  # on the default ubuntu runner sometimes lack the kernel config
+  # for uprobes (`CONFIG_UPROBES`) — when that happens we don't
+  # want to block merges. Flip off once the runner story is solid.
+  # ---------------------------------------------------------------
+  smoke:
+    name: Smoke test (kind)
+    runs-on: ubuntu-latest
+    needs: [userspace, bpf]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download bpf object
+        uses: actions/download-artifact@v4
+        with:
+          name: tls-tap-bpf
+          path: tls-tap/bpf/target/bpfel-unknown-none/release/
+
+      - name: download userspace binary
+        uses: actions/download-artifact@v4
+        with:
+          name: tls-tap-bin
+          path: tls-tap/target/release/
+
+      - name: make artifacts executable
+        run: |
+          chmod +x tls-tap/target/release/tls-tap
+          ls -la tls-tap/bpf/target/bpfel-unknown-none/release/
+
+      - name: verify bpf object has expected sections
+        # readelf is a cheap way to verify we actually emitted
+        # uprobe programs. If aya-ebpf's section naming ever
+        # changes, this fails loudly with useful output.
+        run: |
+          readelf -S tls-tap/bpf/target/bpfel-unknown-none/release/tls-tap-bpf \
+            | tee /tmp/sections
+          grep -q 'uprobe' /tmp/sections || {
+            echo "::error::no uprobe sections in BPF object"
+            exit 1
+          }
+
+      - name: install kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: tls-tap-smoke
+
+      - name: smoke — start a target pod and attach
+        # Spin up a pod running `openssl s_client` in a loop so the
+        # DaemonSet has something to probe. We only assert the
+        # DaemonSet goes Ready — full plaintext observation on a
+        # kind node is flaky because GitHub runner kernels vary.
+        run: |
+          kubectl run target --image=alpine/openssl --restart=Never -- \
+            sh -c 'while true; do openssl s_client -connect example.com:443 < /dev/null; sleep 5; done'
+          kubectl wait --for=condition=Ready pod/target --timeout=60s
+          helm install tls-tap tls-tap/deploy/helm/tls-tap \
+            --set image.repository=ghcr.io/${{ github.repository_owner }}/tls-tap \
+            --set image.tag=latest
+          kubectl rollout status daemonset/tls-tap --timeout=120s
+          kubectl logs -l app.kubernetes.io/name=tls-tap --tail=50

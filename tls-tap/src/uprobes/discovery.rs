@@ -88,9 +88,9 @@ pub fn parse_loaded_libs(maps: &str) -> Vec<PathBuf> {
 /// `libssl.so.1.1`, `libboringssl.so`, etc.
 fn is_shared_object(path: &str) -> bool {
     let last = path.rsplit('/').next().unwrap_or(path);
-    let mut parts = last.split('.').rev();
+    let parts = last.split('.').rev();
     // Walk version numbers: .1.1 -> parts = ["1","1","so","libssl"]
-    while let Some(p) = parts.next() {
+    for p in parts {
         if p == "so" {
             return true;
         }
@@ -152,7 +152,9 @@ mod tests {
         assert!(is_shared_object("/usr/lib/libssl.so"));
         assert!(is_shared_object("/usr/lib/libssl.so.3"));
         assert!(is_shared_object("/usr/lib/libssl.so.1.1"));
-        assert!(is_shared_object("/app/_ssl.cpython-311-x86_64-linux-gnu.so"));
+        assert!(is_shared_object(
+            "/app/_ssl.cpython-311-x86_64-linux-gnu.so"
+        ));
         assert!(!is_shared_object("/usr/bin/python3"));
         assert!(!is_shared_object("/etc/hostname"));
         // Hypothetical adversarial name — ".so" is in the middle
