@@ -59,7 +59,7 @@ clap = { version = "4.4", features = ["derive"] }
 # Web/HTTP
 axum = "0.7"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 
 # eBPF
 aya = { version = "0.12", features = ["async_tokio"] }
