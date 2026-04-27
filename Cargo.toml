@@ -57,7 +57,7 @@ prometheus = "0.13"
 clap = { version = "4.4", features = ["derive"] }
 
 # Web/HTTP
-axum = "0.7"
+axum = "0.8"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace"] }
 
