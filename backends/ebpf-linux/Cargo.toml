@@ -30,7 +30,7 @@ agent-gateway-enforcer-common = { path = "../../agent-gateway-enforcer-common" }
 
 # eBPF dependencies (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
-aya = { version = "0.12", features = ["async_tokio"] }
+aya = { version = "0.13", features = ["async_tokio"] }
 
 [build-dependencies]
 # Build dependencies for eBPF compilation
