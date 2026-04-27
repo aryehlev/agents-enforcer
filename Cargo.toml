@@ -58,7 +58,7 @@ clap = { version = "4.4", features = ["derive"] }
 
 # Web/HTTP
 axum = "0.7"
-tower = "0.4"
+tower = "0.5"
 tower-http = { version = "0.5", features = ["trace"] }
 
 # eBPF
